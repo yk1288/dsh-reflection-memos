@@ -1,26 +1,25 @@
 /**
- * 执行层(v3.2 文档 3.2,第三期实现):
+ * 执行层(v3.2 第三期,auto-advance 重构):
  * - agent/pre-step 缓存 agent 引用
- * - 计划状态机:startPlan 挂载子任务计划,按 turn/end 结果逐个子任务注入推进
- * - 早停:可选(默认关),子任务失败时 agent.cancel
+ * - executePlan():在命令 handler 内用 spawn 子代理顺序执行每个子任务,
+ *   每个子任务独立拥有主 agent 的工具(bash/read/write 等),结果直接返回。
+ *   不依赖 followup/inject/steer 唤醒空闲 agent,完全自主执行。
+ * - 反思层在命令返回后自动触发(已接线到 reflection/task-complete)
  */
 import type { Context } from '@deepseek-ai/cordis';
-import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { Config } from '../config';
 import type { AuditLogger } from '../audit/logger';
 import type { SubTask, TaskPlan } from './planner';
+import { extractOutputText } from './reflector';
 
-interface PlanState {
-  taskId: string;
-  goal: string;
-  subtasks: SubTask[];
-  currentIndex: number; // -1 = 尚未注入任何子任务
-  startedAt: number;
+export interface SubtaskExecutionResult {
+  subtask: SubTask;
+  stopReason: string;
+  output: string;
 }
 
 export class ExecutorModule {
   private agent: any = null;
-  private plans = new Map<string, PlanState>(); // sessionId -> plan
 
   constructor(
     private ctx: Context,
@@ -32,102 +31,70 @@ export class ExecutorModule {
       if (payload && payload.agent) this.agent = payload.agent;
       return next();
     }, { prepend: true });
-
-    // 计划推进:turn/end 判定当前子任务结果 → 推进/早停/完成
-    (this.ctx as any).on('session/event', (session: any, event: any) => {
-      if (!event || event.type !== 'turn/end') return;
-      this.advancePlan(session, event);
-    });
   }
 
   getCurrentAgent(): any {
     return this.agent;
   }
 
-  /** 命令/事件侧补抓 agent(命令可能先于 pre-step 执行) */
   captureAgent(agent: any): void {
     if (agent) this.agent = agent;
   }
 
-  /** 挂载新计划并注入第一个子任务 */
-  startPlan(sessionId: string, plan: TaskPlan): void {
-    this.plans.set(sessionId, {
-      taskId: plan.taskId,
-      goal: plan.goal,
-      subtasks: plan.subtasks,
-      currentIndex: -1,
-      startedAt: Date.now(),
-    });
-    this.audit.debug('plan-start', `taskId=${plan.taskId} subtasks=${plan.subtasks.length}`);
-    this.injectNext(sessionId);
-  }
+  /**
+   * 顺序执行计划中的每个子任务(在命令 handler 内完成,不需要状态机)。
+   * 每个子任务作为独立的 spawn 子代理运行,继承主 agent 的工具(bash/read 等),
+   * 子代理返回文本结果后自动推进下一个。
+   *
+   * 这解决了"命令返回后 agent 空闲,followup/inject/steer 无法唤醒"的根因问题。
+   * 代价:命令期间 UI 显示 loading,所有子任务串行执行(约 10-30s/步 × N 步)。
+   */
+  async executePlan(plan: TaskPlan): Promise<SubtaskExecutionResult[]> {
+    const subagents: any = (this.ctx as any).subagents;
+    if (!subagents?.start) throw new Error('subagents 服务不可用');
+    if (!this.agent) throw new Error('当前没有可用的 agent 引用(尚未观察到 agent/pre-step)');
 
-  private injectNext(sessionId: string): boolean {
-    const plan = this.plans.get(sessionId);
-    if (!plan) return false;
-    const next = plan.subtasks[plan.currentIndex + 1];
-    if (!next) return false;
-    plan.currentIndex += 1;
-    this.injectSubtask(sessionId, next);
-    return true;
-  }
+    this.audit.debug('plan-execute-start', `taskId=${plan.taskId} subtasks=${plan.subtasks.length}`);
+    const results: SubtaskExecutionResult[] = [];
 
-  private injectSubtask(sessionId: string, subtask: SubTask): void {
-    const plan = this.plans.get(sessionId);
-    if (!plan || !this.agent) return;
-    const total = plan.subtasks.length;
-    const text =
-      `【计划执行 · 子任务 ${subtask.order + 1}/${total}】${subtask.description}\n` +
-      `成功标准:\n${subtask.successCriteria.map(c => `- ${c}`).join('\n')}\n` +
-      `请现在执行该子任务;完成后自然收尾,由系统自动推进下一步。遇到阻塞请明确说明,不要擅自扩大范围。`;
-    try {
-      const msg = createUserMessage({
-        source: { kind: 'user' },
-        content: [{ type: 'text', text }],
-      });
-      this.agent.steer(msg); // steer 直接让空闲 agent 转向执行子任务(followup/inject 不会唤醒空闲 agent)
-      this.audit.debug('plan-inject', `session=${sessionId} subtask=${subtask.order + 1}/${total}`);
-    } catch (error) {
-      this.audit.debug('executor', `inject 失败: ${String(error)}`);
-    }
-  }
+    for (let i = 0; i < plan.subtasks.length; i++) {
+      const subtask = plan.subtasks[i];
+      this.audit.debug('plan-execute-step', `subtask=${i + 1}/${plan.subtasks.length} ${subtask.description.slice(0, 80)}`);
 
-  private advancePlan(session: any, event: any): void {
-    const sessionId = session?.id as string;
-    const plan = this.plans.get(sessionId);
-    if (!plan) return;
+      const prompt = [
+        { type: 'text', text: [
+          `【计划执行 · 子任务 ${subtask.order + 1}/${plan.subtasks.length}】${subtask.description}`,
+          `成功标准:`,
+          ...subtask.successCriteria.map(c => `- ${c}`),
+          `请现在执行该子任务并输出结果摘要。`,
+        ].join('\n') },
+      ];
 
-    const reasonKind = event.data?.reason?.kind;
-    const ok = reasonKind === 'completed';
-    const done = plan.currentIndex >= plan.subtasks.length - 1;
-    this.audit.debug('plan-advance', JSON.stringify({
-      sessionId,
-      taskId: plan.taskId,
-      currentIndex: plan.currentIndex,
-      total: plan.subtasks.length,
-      reasonKind,
-      ok,
-      done,
-    }));
-
-    if (!ok && this.config().reflection.autoEarlyStopOnFailure) {
-      // 早停:子任务失败,取消 agent 终止执行
-      this.plans.delete(sessionId);
       try {
-        this.agent?.cancel?.({ kind: 'user', reason: 'subtask failed, early stop' }, {});
+        const run = await subagents.start('spawn', {
+          label: `subtask-${subtask.id}`,
+          prompt,
+          parent: this.agent,
+          maxDepth: 32,
+          // 不传 toolFilter: 子代理继承主 agent 的工具(bash/read/write 等),能真正执行任务
+          agentOptions: {},
+        });
+
+        const settled = await run.result;
+        const output = extractOutputText(settled?.output);
+        const stopReason = settled?.stopReason ?? 'unknown';
+
+        results.push({ subtask, stopReason, output });
+        this.audit.debug('plan-execute-done', `subtask=${i + 1} stopReason=${stopReason} outputLen=${output.length}`);
+
       } catch (error) {
-        this.audit.debug('executor', `cancel 失败: ${String(error)}`);
+        const message = error instanceof Error ? error.message : String(error);
+        results.push({ subtask, stopReason: 'error', output: `执行失败: ${message.slice(0, 300)}` });
+        this.audit.debug('plan-execute-error', `subtask=${i + 1} ${message.slice(0, 300)}`);
       }
-      this.audit.debug('plan-stop', `taskId=${plan.taskId} 子任务 ${plan.currentIndex + 1} 失败,早停`);
-      return;
     }
 
-    if (done) {
-      this.plans.delete(sessionId);
-      this.audit.debug('plan-done', `taskId=${plan.taskId} 全部 ${plan.subtasks.length} 步完成`);
-      return;
-    }
-
-    this.injectNext(sessionId);
+    this.audit.debug('plan-execute-end', `taskId=${plan.taskId} completed=${results.length} steps`);
+    return results;
   }
 }

@@ -67,7 +67,7 @@ export function registerCommands(
       const planner = modules.getPlanner();
       const executor = modules.getExecutor();
 
-      // 0. 命令可能先于回合 pre-step 执行,先补抓当前 agent
+      // 0. 补抓 agent(命令可能先于 pre-step 执行)
       executor.captureAgent(invocation?.agent);
 
       // 1. 生成结构化计划(独立 Planner 子代理)
@@ -76,16 +76,22 @@ export function registerCommands(
         .map((st, i) => `${i + 1}. ${st.description} [${st.checkpointType}]`)
         .join('\n');
 
-      // 2. 挂载计划状态机并注入第一个子任务(executor 按 turn/end 自动推进)
-      const sessionId = invocation?.agent?.session?.id ?? '';
-      executor.startPlan(sessionId, plan);
+      // 2. 在命令 handler 内顺序执行每个子任务(每个子任务独立 spawn 子代理,继承主 agent 工具)
+      //    不再依赖 followup/inject/steer 唤醒空闲 agent,完全自主串行执行
+      const results = await executor.executePlan(plan);
+
+      // 3. 汇总结果
+      const resultText = results.map((r, i) => {
+        const status = r.stopReason === 'completed' ? '✅' : r.stopReason === 'error' ? '❌' : `⚠️(${r.stopReason})`;
+        const snippet = r.output.slice(0, 200).replace(/\n/g, ' ');
+        return `${i + 1}. ${status} ${r.subtask.description.slice(0, 60)}...${snippet ? `\n   ${snippet}` : ''}`;
+      }).join('\n');
 
       return {
         kind: 'success' as const,
         text:
-          `✅ 计划已生成(${plan.subtasks.length} 步),开始自动执行:\n\n${planText}\n\n` +
-          `每个子任务完成后自动推进下一步;遇阻塞会记录(可配置早停)。` +
-          `全部完成或需要干预时会停下,之后可用 /reflect 沉淀经验。`,
+          `📋 计划(${plan.subtasks.length} 步)执行完成:\n\n${resultText}\n\n` +
+          `共 ${results.length} 步,可用 /reflect 沉淀经验。`,
       };
     },
   });
