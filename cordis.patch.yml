@@ -1,0 +1,5 @@
+# dsh-reflection-memos 插件 patch 声明
+# 通过 profile 的 cordis.patch.yml 或 dsh 打包(bundle.patch)注入
+- insert:
+    - id: dsh-reflection-memos
+      name: 'dsh-reflection-memos'
