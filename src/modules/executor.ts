@@ -75,12 +75,19 @@ export class ExecutorModule {
           label: `subtask-${subtask.id}`,
           prompt,
           parent: this.agent,
+          signal: new AbortController().signal, // 必须传: startInProcessRun 首行访问 request.signal.aborted
           maxDepth: 32,
           // 不传 toolFilter: 子代理继承主 agent 的工具(bash/read/write 等),能真正执行任务
           agentOptions: {},
         });
 
-        const settled = await run.result;
+        let settled;
+        try {
+          settled = await run.result;
+        } finally {
+          // 关键:立即释放子代理,否则 agent 数量持续累积导致系统卡顿
+          await run?.dispose?.().catch?.((e: unknown) => this.audit.debug('executor', `dispose 失败: ${String(e)}`));
+        }
         const output = extractOutputText(settled?.output);
         const stopReason = settled?.stopReason ?? 'unknown';
 

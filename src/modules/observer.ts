@@ -80,6 +80,12 @@ export class ObserverModule {
   }
 
   private handle(session: any, event: any): void {
+    // 关键:忽略子代理会话(subagent)的回合事件。
+    // 否则反思子代理自己的 turn/end 会再次触发 task-complete → 又拉起新反思子代理 → 无限递归
+    // (深度曾一路涨到 33)。与官方 memos-cloud 的 includeSubagents=false 语义一致。
+    if (session && (session.header?.origin === 'subagent' || session.header?.origin === 'subagent-fork')) {
+      return;
+    }
     const sessionId = session?.id ?? 'unknown';
     this.lastActiveSession = sessionId;
     const trace: SessionTrace = this.traces.get(sessionId) ?? { sessionId, events: [], lastUserText: '', consecutiveToolFailures: 0, lastAutoReflectAt: 0 };

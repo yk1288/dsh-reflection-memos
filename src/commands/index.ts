@@ -7,6 +7,7 @@ import type { RefinerModule } from '../modules/refiner';
 import type { ObserverModule } from '../modules/observer';
 import type { ExecutorModule } from '../modules/executor';
 import type { PlannerModule } from '../modules/planner';
+import type { SubtaskExecutionResult } from '../modules/executor';
 
 export interface ReflectionModules {
   getReflector: () => ReflectorModule;
@@ -76,12 +77,14 @@ export function registerCommands(
         .map((st, i) => `${i + 1}. ${st.description} [${st.checkpointType}]`)
         .join('\n');
 
-      // 2. 在命令 handler 内顺序执行每个子任务(每个子任务独立 spawn 子代理,继承主 agent 工具)
-      //    不再依赖 followup/inject/steer 唤醒空闲 agent,完全自主串行执行
-      const results = await executor.executePlan(plan);
+      // 2. 用 runMaintenance 保持 agent 上下文存活,顺序 spawn 子任务
+      //    (命令返回后 agent turn 结束上下文失效,runMaintenance 保持活跃直到子任务全部完成)
+      const results = await invocation.agent.runMaintenance(async () => {
+        return executor.executePlan(plan);
+      });
 
       // 3. 汇总结果
-      const resultText = results.map((r, i) => {
+      const resultText = results.map((r: SubtaskExecutionResult, i: number) => {
         const status = r.stopReason === 'completed' ? '✅' : r.stopReason === 'error' ? '❌' : `⚠️(${r.stopReason})`;
         const snippet = r.output.slice(0, 200).replace(/\n/g, ' ');
         return `${i + 1}. ${status} ${r.subtask.description.slice(0, 60)}...${snippet ? `\n   ${snippet}` : ''}`;

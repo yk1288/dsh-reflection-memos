@@ -148,7 +148,12 @@ export class ReflectorModule {
 
     let settled;
     try {
-      settled = await run.result;
+      try {
+        settled = await run.result;
+      } finally {
+        // 关键:释放子代理(防数量累积)
+        await run?.dispose?.().catch?.((e: unknown) => this.audit?.debug('reflector', `dispose 失败: ${String(e)}`));
+      }
     } catch (error) {
       // run.result 本身 reject:子代理基础设施/LLM 调用失败
       const detail = error instanceof Error ? error.message : String(error);

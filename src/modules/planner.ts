@@ -132,7 +132,12 @@ export class PlannerModule {
 
     let settled: any;
     try {
-      settled = await run.result;
+      try {
+        settled = await run.result;
+      } finally {
+        // 关键:释放子代理(防数量累积)
+        await run?.dispose?.().catch?.((e: unknown) => this.audit?.debug('planner', `dispose 失败: ${String(e)}`));
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       throw new Error(`Planner 子代理底层失败: ${detail.slice(0, 500)}`);
