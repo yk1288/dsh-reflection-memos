@@ -11,6 +11,7 @@ import { ReflectorModule } from './modules/reflector';
 import { RefinerModule } from './modules/refiner';
 import { registerCommands } from './commands';
 import { AuditLogger } from './audit/logger';
+import { MemoryStore } from './core/memory-store';
 
 export const name = 'dsh-reflection-memos';
 
@@ -74,6 +75,13 @@ export function apply(ctx: Context, initialConfig: Config): void {
   const observer = new ObserverModule(ctx, getCfg, audit);
   const reflector = new ReflectorModule(ctx, getCfg, () => executor.getCurrentAgent(), audit);
   const refiner = new RefinerModule(ctx, getCfg, audit);
+
+  // v5.0 M0:装配 MemoryStore(账本/查询立即可用;WriteGate 待 M1 接入 writer 后启用)
+  // 行为零变化:refiner 仍走 v3.2 写路径,memoryStore 只作为新抽象对外暴露
+  const memoryStore = new MemoryStore({
+    writer: null, // M1 接入:resolveApiKey 后 new MemOSWriter
+    audit,
+  });
 
   // 注入记忆使用规则到系统提示词变量(第二参数是 (context) => string 函数)
   const systemPrompt: any = (ctx as any).get('systemPrompt') ?? (ctx as any).systemPrompt;
@@ -160,6 +168,14 @@ export function apply(ctx: Context, initialConfig: Config): void {
     reflect: (obs: never, level: string) => reflector.reflect(obs, level),
     getAuditLog: () => refiner.getAuditLog(),
     getStats: () => observer.getStats(),
+  });
+
+  // v5.0 M0:暴露 MemoryStore 服务(账本查询/统计/教训检索;M1 追加 write)
+  (ctx as any).provide('memoryStore', {
+    query: (filter: never) => memoryStore.query(filter),
+    activeLessons: (scenario: string, limit?: number) => memoryStore.activeLessons(scenario, limit),
+    stats: () => memoryStore.stats(),
+    ledger: memoryStore.ledger,
   });
 
   ctx.logger.info('dsh-reflection-memos loaded');

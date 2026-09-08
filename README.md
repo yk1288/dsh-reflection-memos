@@ -41,6 +41,27 @@ MemOS recall ◀─────────────────────�
 
 ## 安装
 
+### 🔧 一键安装(v5.0,推荐 —— 便于在任何已装 DSH 的电脑上安装)
+
+```bash
+# 在插件源码目录下,一条命令完成:构建 → 打包 tgz → dsh plugin add → 注入 profile patch
+pnpm siainstall --profile web
+# 然后重启 DSH Web(pkill -f "dsh web --no-open"),supervisor 会自动拉起
+```
+
+`pnpm siainstall` 是幂等的:重复执行不会重复注入 patch。脚本会打印最后需要配置的
+两个环境变量(`MEMOS_API_KEY` / `MEMOS_USER_ID`)。
+
+**在其他电脑安装(只需 3 步):**
+1. 把本项目源码目录(或打包好的 `dsh-reflection-memos-0.1.0.tgz`)拷贝到新电脑;
+2. 新电脑确保已装 DSH 与 pnpm(插件零额外 npm 依赖,运行时依赖全部走宿主 DSH 的 peerDependencies);
+3. 在新电脑执行 `pnpm siainstall --profile web` → 配置上面两个环境变量 → 重启。
+
+> 需要打包产物给别的电脑时:`pnpm build && pnpm pack` → 得到 `.tgz`,在目标机器执行
+> [`scripts/install.mjs`](scripts/install.mjs) 的 `--tgz` 模式(见脚本用法)。
+
+### 手动安装(v3.2 保留)
+
 ```bash
 # 1. 安装到 DSH web profile
 dsh plugin --profile web add /path/to/dsh-reflection-memos-0.1.0.tgz

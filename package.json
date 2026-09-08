@@ -5,6 +5,11 @@
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "scripts": {
+    "build": "tsup",
+    "prepack": "tsup",
+    "siainstall": "node scripts/install.mjs"
+  },
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
@@ -14,6 +19,7 @@
   },
   "files": [
     "lib",
+    "scripts/install.mjs",
     "cordis.patch.yml",
     "README.md"
   ],
