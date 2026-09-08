@@ -232,7 +232,8 @@ export class WriteGate {
       confidence: lesson.confidence,
       failureCount: lesson.failureCount,
       importance: lesson.severity === 'high' ? 0.9 : lesson.severity === 'medium' ? 0.7 : 0.5,
-      scenarios: lesson.applicableScenarios ?? [],
+      // 检索场景:explicitable 的适用场景标签 + 教训本身的中文 scenario 文本(供任务意图匹配)
+      scenarios: [...new Set([...(lesson.applicableScenarios ?? []), lesson.scenario].filter(Boolean))],
       triage: 'pending',
       note: `source=${candidate.source}`,
     });

@@ -3,7 +3,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Config } from './config';
-import { ConfigSchema, installSettings, getConfig } from './config';
+import { ConfigSchema, installSettings, getConfig, gateConfigFrom } from './config';
 import { PlannerModule } from './modules/planner';
 import { ExecutorModule } from './modules/executor';
 import { ObserverModule } from './modules/observer';
@@ -12,6 +12,8 @@ import { RefinerModule } from './modules/refiner';
 import { registerCommands } from './commands';
 import { AuditLogger } from './audit/logger';
 import { MemoryStore } from './core/memory-store';
+import { MemOSWriter } from './backends/memos-backend';
+import { resolveMemOSApiKey } from './backends/api-key';
 
 export const name = 'dsh-reflection-memos';
 
@@ -74,14 +76,26 @@ export function apply(ctx: Context, initialConfig: Config): void {
   const planner = new PlannerModule(ctx, getCfg, () => executor.getCurrentAgent(), audit);
   const observer = new ObserverModule(ctx, getCfg, audit);
   const reflector = new ReflectorModule(ctx, getCfg, () => executor.getCurrentAgent(), audit);
-  const refiner = new RefinerModule(ctx, getCfg, audit);
 
-  // v5.0 M0:装配 MemoryStore(账本/查询立即可用;WriteGate 待 M1 接入 writer 后启用)
-  // 行为零变化:refiner 仍走 v3.2 写路径,memoryStore 只作为新抽象对外暴露
+  // v5.0 M1:MemoryStore 是唯一写入口 —— writerProvider 惰性解析(apply 同步,credentials 异步),
+  // gateConfig 由现有配置实时映射(热更新友好);RefinerModule 改为经 store 提交。
   const memoryStore = new MemoryStore({
-    writer: null, // M1 接入:resolveApiKey 后 new MemOSWriter
+    writerProvider: async () => {
+      const memos = getCfg().memos;
+      if (!memos.userId) throw new Error('memos.userId 未配置');
+      const apiKey = await resolveMemOSApiKey(ctx, memos.apiKeyEnv);
+      return new MemOSWriter({
+        baseUrl: memos.baseUrl,
+        apiKey,
+        userId: memos.userId,
+        timeoutMs: getCfg().performance.addTimeoutMs,
+        redact: true, // v5.0 默认脱敏(GAP-1)
+      });
+    },
     audit,
+    gateConfig: () => gateConfigFrom(getCfg()),
   });
+  const refiner = new RefinerModule(ctx, getCfg, audit, memoryStore);
 
   // 注入记忆使用规则到系统提示词变量(第二参数是 (context) => string 函数)
   const systemPrompt: any = (ctx as any).get('systemPrompt') ?? (ctx as any).systemPrompt;

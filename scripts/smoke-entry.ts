@@ -8,12 +8,16 @@
  *
  * 运行:pnpm exec esbuild scripts/smoke-entry.ts --bundle --format=esm --platform=node --outfile=/tmp/smoke.mjs && node /tmp/smoke.mjs
  */
+import * as fs from 'node:fs';
 import { redactText, sanitizeExcerpt } from '../src/core/redact';
 import { LedgerBackend } from '../src/backends/ledger-backend';
 import { EvolutionLedger, contentKey } from '../src/core/ledger';
 import { WriteGate, derivePatternKey } from '../src/core/write-gate';
-import { AuditLogger } from '../src/audit/logger';
 import type { WriteGateConfig } from '../src/core/write-gate';
+import { MemoryStore } from '../src/core/memory-store';
+import { RefinerModule } from '../src/modules/refiner';
+import { AuditLogger } from '../src/audit/logger';
+import type { ReflectionResult } from '../src/types/reflection';
 import type { MemOSWriter } from '../src/backends/memos-backend';
 
 let passed = 0;
@@ -138,7 +142,7 @@ console.log('\n[3] 单一写入闸门');
   // 配额:用独立新 gate(value ref),maxPerDay=3,验证第三条被拒
   {
     const gate2 = new WriteGate({ writer: stubWriter, ledger, audit, config: () => ({ ...cfg, maxMemoriesPerDay: 3 }) });
-    const mk = (i: number) => ({ kind: 'fact' as const, fact: { fact: `配额测试事实 ${i}`, verificationMethod: 'm', evidence: '这是一段足够长的证据文本用于配额测试内容', confidence: 0.9, category: 'technical', tags: [] }, source: 'reflection' as const });
+    const mk = (i: number) => ({ kind: 'fact' as const, fact: { fact: `配额测试事实 ${i}`, verificationMethod: 'm', evidence: '这是一段足够长的证据文本用于配额测试内容', confidence: 0.9, category: 'technical' as const, tags: [] as string[] }, source: 'reflection' as const });
     const a = await gate2.submit(mk(0));
     const b = await gate2.submit(mk(1));
     const c = await gate2.submit(mk(2));
@@ -146,6 +150,110 @@ console.log('\n[3] 单一写入闸门');
     assert('配额:前三条写入', a.accepted === true && b.accepted === true && c.accepted === true);
     assert('每日配额生效(maxPerDay=3,第4条被拒)', d.accepted === false && d.reason === 'quota', JSON.stringify(d));
   }
+}
+
+// ---------- 4. M1 集成:MemoryStore(writerProvider)+ RefinerModule ----------
+console.log('\n[4] M1 集成:refiner → MemoryStore → WriteGate');
+{
+  const dir = `/tmp/sia-m1-test-${Date.now()}`;
+  const auditDir = `/tmp/sia-m1-audit-${Date.now()}`;
+  const audit = new AuditLogger(auditDir);
+
+  // stub writer:只统计调用,不真发 MemOS
+  let stubCalls = 0;
+  const stub = {
+    submitVerifiedFact: async () => { stubCalls++; return { success: true, taskId: 'm1-fact' }; },
+    submitLesson: async () => { stubCalls++; return { success: true, taskId: 'm1-lesson' }; },
+    verifyIngestion: async () => true,
+  } as unknown as MemOSWriter;
+
+  const store = new MemoryStore({
+    writerProvider: async () => stub,
+    audit,
+    ledgerDir: dir,
+    gateConfig: () => ({ ...minimum, maxMemoriesPerDay: 20 }),
+  });
+
+  const refiner = new RefinerModule({} as never, () => cfgForRefiner(20), audit, store);
+
+  const result: ReflectionResult = {
+    version: '1.0',
+    taskSuccess: true,
+    overallScore: 0.9,
+    errors: [],
+    verifiedFacts: [
+      {
+        fact: 'DSH web 重启必须使用 launch-stop.sh',
+        verificationMethod: '真实环境验证',
+        evidence: '多次直接 pkill 导致 Web 无法自愈,改用脚本后 supervisor 正常拉起(足够长证据)',
+        confidence: 0.95,
+        category: 'process',
+        tags: ['deployment'],
+      },
+    ],
+    lessons: [
+      {
+        scenario: '重启 DSH Web',
+        mistake: '直接 pkill 全部 dsh 进程',
+        correctApproach: '使用 launch-stop.sh 优雅停止',
+        evidence: '两次踩坑后确认脚本方式可靠(足够长证据文本)', // 非空
+        confidence: 0.85,
+        applicableScenarios: ['deployment'],
+        failureCount: 2,
+        severity: 'high',
+      },
+    ],
+    improvements: [],
+  };
+
+  const summary = await refiner.processReflectionResult(result);
+  assert('processReflectionResult 汇总:1 fact + 1 lesson 入库', summary.ingestedCount === 2 && summary.failedCount === 0, JSON.stringify(summary));
+  assert('写入经 WriteGate(stub 被调用 2 次:fact+lesson)', stubCalls === 2, `calls=${stubCalls}`);
+
+  // 账本里应有两类条目,lesson 默认 triage=pending
+  const factsIn = store.query({ kind: 'fact' });
+  const lessonsIn = store.query({ kind: 'lesson' });
+  assert('账本记录 fact 条目', factsIn.length === 1);
+  assert('账本记录 lesson 条目且 triage=pending', lessonsIn.length === 1 && lessonsIn[0].triage === 'pending');
+
+  // 审计带 gate: write-gate 标记
+  const auditText = listAudit(auditDir);
+  assert('审计含 gate:write-gate 标记', auditText.includes('"gate":"write-gate"'), auditText.slice(0, 200));
+
+  // activeLessons: pending 不应被检索到(GAP-3)
+  assert('pending 教训不参与召回检索', store.activeLessons('重启 DSH Web').length === 0);
+  // 确认分流后再检索 → 命中
+  for (const e of lessonsIn) store.ledger.acknowledge(e.memoryKey);
+  assert('确认后教训可被检索', store.activeLessons('重启 DSH Web').length === 1);
+}
+
+// ---------- 辅助 ----------
+const minimum = {
+  evidenceMinChars: 20,
+  minConfidenceForFact: 0.8,
+  minConfidenceForLesson: 0.7,
+  maxMemoriesPerDay: 50,
+  minFailuresForLesson: 2,
+  verifyIngestion: true,
+  redactEnabled: true,
+  minVerifyRelativity: 0.6,
+  maxVerifyRetries: 1,
+  verifyInitialDelayMs: 1,
+  verifyBackoffFactor: 1.1,
+  searchTimeoutMs: 1000,
+};
+
+function cfgForRefiner(maxPerDay: number) {
+  return {
+    refiner: { writeVerifiedFacts: true, writeLessons: true, maxMemoriesPerDay: maxPerDay },
+  } as never;
+}
+
+function listAudit(dir: string): string {
+  const files = fs.readdirSync(dir);
+  const f = files.find((x) => x.startsWith('audit-'));
+  if (!f) return '';
+  return fs.readFileSync(`${dir}/${f}`, 'utf-8');
 }
 
 function pathForAudit() {

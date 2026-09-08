@@ -245,6 +245,10 @@ dsh-reflection-memos/
 
 ## 七、迁移路径(每阶段可运行,可随时暂停)
 
+> **进度:M0 ✅ 完成(2026-09-08) / M1 ✅ 完成(2026-09-08)**
+> - M0:core/ + backends/ 抽取,MemoryStore 门面,redact 脱敏层,ledger 状态机,WriteGate 骨架;commit `88fa089`
+> - M1:refiner 写路径迁移到 WriteGate(唯一闸门),writerProvider 惰性装配,gateConfigFrom 配置映射,api-key 共享解析;冒烟 27 项全绿
+
 | 阶段 | 内容 | 产出 | 验收 |
 |---|---|---|---|
 | **M0 抽取核心**(2-3 天) | 建 `core/` + `backends/`,MemoryStore 门面套现有实现;行为零变化 | 新目录 + 编译通过 | `/reflect` / `/plan-and-execute` / `/memos-stat` 照常工作 |

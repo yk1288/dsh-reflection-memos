@@ -192,3 +192,24 @@ export function installSettings(ctx: Context, defaultConfig: Config): void {
 export function getConfig(): Config {
   return current();
 }
+
+/**
+ * 将现有 Config(沿 v3.2 的 reflection/refiner/performance 命名空间)映射为 WriteGateConfig。
+ * M1 起 WriteGate 是唯一写入闸门,此处保证"旧配置键 → 闸门"零用户改动。
+ */
+export function gateConfigFrom(config: Config): import('./core/write-gate').WriteGateConfig {
+  return {
+    evidenceMinChars: config.reflection.evidenceMinChars,
+    minConfidenceForFact: config.reflection.minConfidenceForFact,
+    minConfidenceForLesson: config.reflection.minConfidenceForLesson,
+    maxMemoriesPerDay: config.refiner.maxMemoriesPerDay,
+    minFailuresForLesson: config.refiner.minFailuresForLesson,
+    verifyIngestion: config.refiner.verifyIngestion,
+    redactEnabled: true, // v5.0 默认开启脱敏(研究 GAP-1)
+    minVerifyRelativity: config.performance.minVerifyRelativity,
+    maxVerifyRetries: config.refiner.maxVerifyRetries,
+    verifyInitialDelayMs: config.performance.verifyInitialDelayMs,
+    verifyBackoffFactor: config.performance.verifyBackoffFactor,
+    searchTimeoutMs: config.performance.searchTimeoutMs,
+  };
+}
