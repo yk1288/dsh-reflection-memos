@@ -324,6 +324,12 @@ export class WriteGate {
       candidate.kind === 'fact'
         ? candidate.fact?.fact ?? ''
         : candidate.lesson?.correctApproach ?? candidate.lesson?.scenario ?? '';
+    // patternKey 未显式传入时,从内容推导(保证审计可追溯,研究 GAP-2)
+    const patternKey =
+      candidate.patternKey ??
+      (candidate.kind === 'lesson'
+        ? derivePatternKey(candidate.lesson?.scenario ?? '')
+        : derivePatternKey(candidate.fact?.fact ?? ''));
     this.deps.audit.record({
       type: candidate.kind,
       content: sanitizeValue(content) as string,
@@ -333,7 +339,7 @@ export class WriteGate {
       error,
       at: new Date().toISOString(),
       // 附加 gate 标记与 patternKey,便于统计(研究 GAP-2 可追溯)
-      ...(candidate.patternKey ? { patternKey: candidate.patternKey } : {}),
+      patternKey,
       gate: 'write-gate',
     } as never); // 扩展字段经 as never 兼容现有 MemoryWriteResult
   }

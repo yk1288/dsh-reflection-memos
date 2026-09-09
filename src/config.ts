@@ -1,14 +1,18 @@
 /**
- * 配置注册(v3.2 文档 5.3)
+ * 配置注册(v5.0:适配 DSH 当前 settings 服务)
  *
- * ⚠️ 关键点:
- * - `@deepseek-ai/schemastery` 只有默认导出(`export { Schema as default }`),没有命名导出 z
- * - `installSettingsSection` 返回 void(scope 在内部闭包中),外部拿不到;
- *   正确姿势是保存 setSource 传入的配置 thunk,之后用 getConfig() 动态读取 → 支持配置热更新
+ * 真实环境修正(2026-09-09):v3.2 的 `installSettingsSection` 在当前 DSH
+ * (`@deepseek-ai/dsh-settings`) 已不存在且被移除;官方 memos-cloud 插件使用
+ * `ctx.inject(['settings'], child => child.settings.register(ns, Schema, { base }))` 拿到
+ * `scope`(含 `get()` 热更新),本插件改为同一模式:
+ *   - 命名空间:`dsh-reflection-memos`(唯一,符合小写连字符)
+ *   - 注册后 `current = () => scope.get()`,实现配置热更新
+ *   - 卸载时回退到合并默认(apply 期闭包)
+ * 注:`@deepseek-ai/schemastery` 只有默认导出(`z` 即默认 Schema)。
  */
 import type { Context } from '@deepseek-ai/cordis';
+import type {} from '@deepseek-ai/dsh-settings';
 import z from '@deepseek-ai/schemastery';
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings';
 
 export const ConfigSchema = z.object({
   memos: z.object({
@@ -152,13 +156,16 @@ function mergeConfig(base: Config, override: Partial<Config> | undefined): Confi
   return result;
 }
 
-/** 配置源 thunk:由 installSettingsSection 的 setSource 注入 */
+/** 配置源 thunk:apply() 先指向合并默认,settings 注册后指向 scope.get()(热更新) */
 let current: () => Config = () => DEFAULT_CONFIG;
 
+/**
+ * 注册配置到 DSH settings 服务(v5.0 适配)。
+ * 模式与官方 memos-cloud 插件一致:`ctx.inject(['settings'])` → `settings.register(ns, Schema, { base })`。
+ * 返回后 `getConfig()` 即读到用户覆盖;插件卸载时回退到 entry 合并默认。
+ */
 export function installSettings(ctx: Context, defaultConfig: Config): void {
-  // 关键:先让 current 指向"完整默认值 + 用户配置"的合并结果。
-  // settings 服务的注入回调是异步的,apply() 内同步的 getConfig() 必须立即拿到可用配置,
-  // 否则 getCfg().reflection 会是 undefined 导致启动崩溃。
+  // 1) 先让 current 指向"完整默认值 + 用户配置"的合并结果(apply 同步期即可用)
   const base = mergeConfig(DEFAULT_CONFIG, defaultConfig);
   // userId 回退链:settings 配置 → MEMOS_USER_ID 环境变量 → ''(运行时 ensureWriter 报错)
   if (!base.memos.userId) {
@@ -166,26 +173,20 @@ export function installSettings(ctx: Context, defaultConfig: Config): void {
     if (envUserId && envUserId.trim()) base.memos.userId = envUserId.trim();
   }
   current = () => base;
-  installSettingsSection(
-    ctx,
-    settingsNamespace('dsh-reflection-memos'),
-    ConfigSchema,
-    base,
-    {
-      // setSource 是"设置系统把指向已解析配置的 thunk 交给我们保存"，不是我们提供 getter
-      setSource: (source) => {
-        current = source;
-      },
-      onChange: () => {
-        ctx.logger.info('Reflection config updated');
-      },
-      // validate 通过 throw 拒绝;返回值被忽略。
-      // 注意:这里必须非阻塞 —— settings 注册发生在异步注入回调中,
-      // 在此抛错会导致注册失败/启动异常。userId 等业务校验留到运行时
-      // (ensureWriter 会抛 "memos.userId 未配置")。
-      validate: () => {},
-    },
-  );
+
+  // 2) settings 服务存在时注册命名空间,scope.get() 覆盖用户配置 → 热更新
+  ctx.inject(['settings'], (settingsCtx) => {
+    const scope = (settingsCtx as any).settings.register(
+      'dsh-reflection-memos',
+      ConfigSchema,
+      { base },
+    );
+    current = () => scope.get() as Config;
+    // 插件/fiber 卸载时回退到 entry 合并默认
+    (settingsCtx as any).effect(() => () => {
+      current = () => base;
+    });
+  });
 }
 
 /** 动态读取当前(含用户设置覆盖)的配置 */
