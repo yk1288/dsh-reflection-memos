@@ -15,6 +15,7 @@
  */
 import type { Lesson, VerifiedFact } from '../types/reflection';
 import type { EvolutionLedger } from './ledger';
+import { contentKey as contentKeyOf } from './ledger';
 import type { MemOSWriter } from '../backends/memos-backend';
 import type { AuditLogger } from '../audit/logger';
 import { redactText, sanitizeValue } from './redact';
@@ -119,6 +120,8 @@ export class WriteGate {
     }
 
     const patternKey = candidate.patternKey ?? derivePatternKey(fact.fact);
+    // 修复(真实环境):同 contentKey 已在账本中时保留其确认状态,避免覆盖重置 pending
+    const existing = this.deps.ledger.get(contentKeyOf(fact.fact));
     const entry = this.deps.ledger.createEntry({
       content: fact.fact,
       kind: 'fact',
@@ -127,9 +130,13 @@ export class WriteGate {
       importance: 0.7,
       category: fact.category,
       scenarios: fact.tags ?? [],
-      triage: 'pending',
-      note: `source=${candidate.source}`,
+      triage: existing ? existing.triage : 'pending',
+      note: `source=${candidate.source}${existing ? ' (re-entry)' : ''}`,
     });
+    if (existing) {
+      entry.status = existing.status;
+      entry.hitCount = existing.hitCount;
+    }
 
     // 配额:提交新 fact 前检查(被拒只不入库,不预写账本避免残留 pending)
     if (!this.quotaOrFail(candidate)) {
@@ -225,6 +232,9 @@ export class WriteGate {
       return { accepted: false, ingested: false, reason: 'rejected' };
     }
 
+    // ⚠️ 修复(真实环境):同 contentKey 已在账本中时,upsert 覆盖会重置 triage/status。
+    // 先查已有条目,保留其确认状态(triage/status/hitCount),避免把用户已确认的教训打回 pending。
+    const existing = this.deps.ledger.get(contentKeyOf(lesson.correctApproach));
     const entry = this.deps.ledger.createEntry({
       content: lesson.correctApproach,
       kind: 'lesson',
@@ -234,9 +244,14 @@ export class WriteGate {
       importance: lesson.severity === 'high' ? 0.9 : lesson.severity === 'medium' ? 0.7 : 0.5,
       // 检索场景:explicitable 的适用场景标签 + 教训本身的中文 scenario 文本(供任务意图匹配)
       scenarios: [...new Set([...(lesson.applicableScenarios ?? []), lesson.scenario].filter(Boolean))],
-      triage: 'pending',
-      note: `source=${candidate.source}`,
+      // 已确认过的教训不被重置回 pending(研究 GAP-3:确认状态一旦产生应保持)
+      triage: existing ? existing.triage : 'pending',
+      note: `source=${candidate.source}${existing ? ' (re-entry)' : ''}`,
     });
+    if (existing) {
+      entry.status = existing.status;
+      entry.hitCount = existing.hitCount;
+    }
 
     // 配额:提交新 lesson 前检查(成功后才落账本,被拒不残留)
     if (!this.quotaOrFail(candidate)) {

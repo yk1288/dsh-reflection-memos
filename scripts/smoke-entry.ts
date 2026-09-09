@@ -153,6 +153,25 @@ console.log('\n[3] 单一写入闸门');
     assert('配额:前三条写入', a.accepted === true && b.accepted === true && c.accepted === true);
     assert('每日配额生效(maxPerDay=3,第4条被拒)', d.accepted === false && d.reason === 'quota', JSON.stringify(d));
   }
+
+  // 防回归(真实环境修复):已确认(acknowledged)的教训不被重写回 pending
+  {
+    const gate3 = new WriteGate({ writer: stubWriter, ledger, audit, config: () => ({ ...cfg, maxMemoriesPerDay: 3 }) });
+    // 先写入一条 lesson(未达 minFailures 会拒,直接绕过用 createEntry + upsert 模拟账本态)
+    const seeded = ledger.createEntry({
+      content: '已确认教训内容文本', kind: 'lesson', patternKey: 'fix.confirm-keep',
+      failureCount: 2, importance: 0.9, scenarios: ['x'], triage: 'acknowledged',
+    });
+    ledger.upsert(seeded);
+    // 再次提交同内容 lesson(fresh 分支会走 createEntry+upsert)
+    const r7 = await gate3.submit({ kind: 'lesson', lesson: {
+      scenario: '确认保持', mistake: 'm', correctApproach: '已确认教训内容文本',
+      evidence: '这是一段足够长的证据文本用于确认保持测试', confidence: 0.9,
+      applicableScenarios: ['x'], failureCount: 2, severity: 'high',
+    }, source: 'reflection' });
+    const afterEntry = r7.memoryKey ? ledger.get(r7.memoryKey) : undefined;
+    assert('防回归:重写保留 acknowledged(不重置 pending)', afterEntry?.triage === 'acknowledged', JSON.stringify(afterEntry && { triage: afterEntry.triage, status: afterEntry.status }));
+  }
 }
 
 // ---------- 4. M1 集成:MemoryStore(writerProvider)+ RefinerModule ----------
