@@ -11,6 +11,7 @@ import type { SubtaskExecutionResult } from '../modules/executor';
 import type { MemoryStore } from '../core/memory-store';
 import { RetrievalPipeline } from '../core/retrieval';
 import type { ApplierModule } from '../loop/applier';
+import type { EvolverModule } from '../loop/evolver';
 
 export interface ReflectionModules {
   getReflector: () => ReflectorModule;
@@ -20,6 +21,7 @@ export interface ReflectionModules {
   getPlanner: () => PlannerModule;
   getStore: () => MemoryStore;
   getApplier?: () => ApplierModule;
+  getEvolver?: () => EvolverModule;
 }
 
 export function registerCommands(
@@ -164,6 +166,41 @@ export function registerCommands(
       return {
         kind: 'success' as const,
         text: `已确认 ${confirmed} 条教训(可被检索注入)。`,
+      };
+    },
+  });
+
+  // /evolve:手动演化作业(M3)—— 衰减/合并/晋升/会话整合
+  commands.register({
+    name: 'evolve',
+    description: '触发记忆演化作业(衰减/合并/晋升/会话整合)',
+    input: { hint: '可选:--promote 执行晋升; --consolidate 执行合并; 默认仅衰减' },
+    handler: async (invocation: any) => {
+      const evolver = modules.getEvolver?.();
+      if (!evolver) {
+        return { kind: 'error' as const, text: 'evolver 服务不可用(尚未装配)。' };
+      }
+      const args = (invocation?.rawInput ?? '').trim();
+      const jobs = {
+        decay: true,
+        promote: /\b--promote\b/.test(args),
+        consolidate: /\b--consolidate\b/.test(args),
+        synthesize: /\b--synthesize\b/.test(args),
+      };
+      const report = await evolver.run(jobs);
+      const promoted = report.promoted.length > 0
+        ? `\n- 晋升 Skill:${report.promoted.map((p) => `\n    ${p}`).join('')}`
+        : '';
+      return {
+        kind: 'success' as const,
+        text:
+          `演化完成(${JSON.stringify(jobs)}):\n` +
+          `- 衰减:${report.decayed} 项\n` +
+          `- 复活:${report.revived} 项\n` +
+          `- 归档:${report.archived} 项\n` +
+          `- 合并:${report.consolidated} 项\n` +
+          `- 会话整合:${report.synthesized} 项${promoted}` +
+          (report.errors.length > 0 ? `\n- 错误:${report.errors.join('; ')}` : ''),
       };
     },
   });

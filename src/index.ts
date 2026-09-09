@@ -13,6 +13,7 @@ import { registerCommands } from './commands';
 import { AuditLogger } from './audit/logger';
 import { MemoryStore } from './core/memory-store';
 import { ApplierModule } from './loop/applier';
+import { EvolverModule } from './loop/evolver';
 import { RetrievalPipeline } from './core/retrieval';
 import { MemOSWriter } from './backends/memos-backend';
 import { resolveMemOSApiKey } from './backends/api-key';
@@ -102,6 +103,15 @@ export function apply(ctx: Context, initialConfig: Config): void {
   // v5.0 M2:应用层—— agent/pre-step 注入相关教训(双区),让 agent 动手前就知道"别踩的坑"
   const applier = new ApplierModule(ctx, getCfg, audit, memoryStore);
 
+  // v5.0 M3:演化引擎—— 衰减/合并/晋升/会话整合(记忆进化,能力进化 O5)
+  const evolver = new EvolverModule(ctx, getCfg, audit, memoryStore, () => ({
+    decayAfterDays: 30,
+    archiveAfterDays: 60,
+    importanceBoostFactor: 3,
+    minReinforcementForPromotion: 3,
+    maxViolationRateForPromotion: 0.2,
+  }));
+
   // 注入记忆使用规则到系统提示词变量(第二参数是 (context) => string 函数)
   const systemPrompt: any = (ctx as any).get('systemPrompt') ?? (ctx as any).systemPrompt;
   if (systemPrompt?.variable) {
@@ -169,6 +179,7 @@ export function apply(ctx: Context, initialConfig: Config): void {
     getPlanner: () => planner,
     getStore: () => memoryStore,
     getApplier: () => applier,
+    getEvolver: () => evolver,
   });
 
   // 周期反思(默认关闭)
@@ -211,6 +222,11 @@ export function apply(ctx: Context, initialConfig: Config): void {
     retrieve: (intent: string) =>
       new RetrievalPipeline(memoryStore.ledger, retrievalOptions).retrieve({ intent }),
     applier,
+  });
+
+  // v5.0 M3:暴露 Evolver 服务(手动 /evolve 与周期作业共用)
+  (ctx as any).provide('evolverService', {
+    run: (jobs: never) => evolver.run(jobs),
   });
 
   ctx.logger.info('dsh-reflection-memos loaded');

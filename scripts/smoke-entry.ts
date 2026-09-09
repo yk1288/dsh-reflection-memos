@@ -9,6 +9,7 @@
  * 运行:pnpm exec esbuild scripts/smoke-entry.ts --bundle --format=esm --platform=node --outfile=/tmp/smoke.mjs && node /tmp/smoke.mjs
  */
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { redactText, sanitizeExcerpt } from '../src/core/redact';
 import { LedgerBackend } from '../src/backends/ledger-backend';
 import { EvolutionLedger, contentKey } from '../src/core/ledger';
@@ -17,6 +18,7 @@ import type { WriteGateConfig } from '../src/core/write-gate';
 import { MemoryStore } from '../src/core/memory-store';
 import { RetrievalPipeline } from '../src/core/retrieval';
 import { ApplierModule } from '../src/loop/applier';
+import { EvolverModule } from '../src/loop/evolver';
 import { RefinerModule } from '../src/modules/refiner';
 import { AuditLogger } from '../src/audit/logger';
 import type { EvolutionEntry } from '../src/types/evolution';
@@ -354,6 +356,75 @@ console.log('\n[5] M2 检索注入(双区):retrieval → applier');
   const injectedText = injectedMsg?.content?.find((b: any) => b.type === 'text')?.text ?? '';
   assert('M2: 注入块存在且含教训文本', injectedText.includes('FTP 覆盖线上文件必须先备份'));
   assert('M2: 原 messages 未被修改(冻结安全)', decision.messages.length === 2 && decision.messages[1].content.length === 1);
+}
+
+// ---------- 6. M3 演化引擎 ----------
+console.log('\n[6] M3 演化引擎:evolver');
+{
+  const dir = `/tmp/sia-m3-test-${Date.now()}`;
+  const audit = new AuditLogger(`/tmp/sia-m3-audit-${Date.now()}`);
+  const store = new MemoryStore({ writerProvider: null, audit, ledgerDir: dir });
+  const evolver = new EvolverModule({} as never, () => ({}) as never, audit, store, () => ({
+    decayAfterDays: 30,
+    archiveAfterDays: 60,
+    importanceBoostFactor: 3,
+    minReinforcementForPromotion: 3,
+    maxViolationRateForPromotion: 0.2,
+    skillsDir: `/tmp/sia-m3-skills-${Date.now()}`,
+  }));
+
+  // 准备:1 条 acknowledged 教训(reinforcement=4, violation=0 → 可晋升)
+  const promo = store.ledger.createEntry({
+    content: 'FTP 覆盖先备份再同步(FTP 覆盖先备份再同步的完整教训正文)',
+    kind: 'lesson', patternKey: 'ftp.先备份', failureCount: 3,
+    reinforcementCount: 4, violationCount: 0, importance: 0.95,
+    scenarios: ['FTP'], triage: 'acknowledged',
+  });
+  store.ledger.upsert(promo);
+
+  // 1) decay:手动构造 lastSeen 很旧的条目 → decay
+  const stale = store.ledger.createEntry({
+    content: 'stale 教训内容', kind: 'lesson', patternKey: 'stale.x',
+    failureCount: 1, importance: 0.3, scenarios: ['x'], triage: 'acknowledged',
+  });
+  stale.lastSeen = new Date(Date.now() - 45 * 86400_000).toISOString(); // 45 天前
+  store.ledger.upsert(stale);
+
+  const r1 = await evolver.run({ decay: true });
+  assert('M3: decay 使 45 天未命中条目 decayed', store.ledger.get(stale.memoryKey)?.status === 'decayed' && r1.decayed === 1, JSON.stringify(r1));
+  assert('M3: 高 importance 教训不被衰减(重要性×3 窗口)', store.ledger.get(promo.memoryKey)?.status === 'active');
+
+  // 2) consolidate:同 patternKey 3 条 → 合并为 1
+  for (let i = 0; i < 2; i++) {
+    const dup = store.ledger.createEntry({
+      content: `FTP 覆盖先备份再同步(FTP 覆盖先备份再同步的完整教训正文)-v${i}`,
+      kind: 'lesson', patternKey: 'ftp.先备份', failureCount: 1, importance: 0.6,
+      scenarios: ['FTP'], triage: 'acknowledged',
+    });
+    store.ledger.upsert(dup);
+  }
+  const r2 = await evolver.run({ consolidate: true });
+  const merged = store.ledger.query({ patternKey: 'ftp.先备份' });
+  assert('M3: consolidate 合并同 patternKey 版本链', r2.consolidated >= 1 && merged.filter((e) => e.status === 'merged').length >= 1, JSON.stringify({ r2, n: merged.length }));
+
+  // 3) promote:reinforcement=4 violation=0 且 acknowledged → 晋升 Skill
+  const skillsDir = `/tmp/sia-m3-skills-${Date.now()}`;
+  const evolver2 = new EvolverModule({} as never, () => ({}) as never, audit, store, () => ({
+    decayAfterDays: 30, archiveAfterDays: 60, importanceBoostFactor: 3,
+    minReinforcementForPromotion: 3, maxViolationRateForPromotion: 0.2, skillsDir,
+  }));
+  const r3 = await evolver2.run({ promote: true });
+  const skillPath = path.join(skillsDir, 'lesson-ftp-先备份', 'SKILL.md');
+  assert('M3: promote 生成 Skill 文件', r3.promoted.length === 1 && fs.existsSync(skillPath), JSON.stringify(r3.promoted));
+  const skillContent = fs.existsSync(skillPath)
+    ? fs.readFileSync(skillPath, 'utf-8') : '';
+  assert('M3: Skill description 单行化(防 YAML 解析挂)', !skillContent.split('\n')[1]?.includes(':') || skillContent.includes('---'), skillContent.slice(0, 60));
+
+  // 4) synthesize:命中条目 → episodic 摘要(仅本地)
+  store.ledger.touch(promo.memoryKey);
+  const r4 = await evolver2.run({ synthesize: true });
+  const epi = store.ledger.query({ kind: 'episodic' });
+  assert('M3: synthesize 生成 episodic 条目(kind=episodic)', r4.synthesized === 1 && epi.length === 1 && epi[0].kind === 'episodic', JSON.stringify(r4));
 }
 
 // ---------- 辅助 ----------
