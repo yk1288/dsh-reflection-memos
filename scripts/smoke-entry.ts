@@ -15,8 +15,11 @@ import { EvolutionLedger, contentKey } from '../src/core/ledger';
 import { WriteGate, derivePatternKey } from '../src/core/write-gate';
 import type { WriteGateConfig } from '../src/core/write-gate';
 import { MemoryStore } from '../src/core/memory-store';
+import { RetrievalPipeline } from '../src/core/retrieval';
+import { ApplierModule } from '../src/loop/applier';
 import { RefinerModule } from '../src/modules/refiner';
 import { AuditLogger } from '../src/audit/logger';
+import type { EvolutionEntry } from '../src/types/evolution';
 import type { ReflectionResult } from '../src/types/reflection';
 import type { MemOSWriter } from '../src/backends/memos-backend';
 
@@ -225,6 +228,112 @@ console.log('\n[4] M1 集成:refiner → MemoryStore → WriteGate');
   // 确认分流后再检索 → 命中
   for (const e of lessonsIn) store.ledger.acknowledge(e.memoryKey);
   assert('确认后教训可被检索', store.activeLessons('重启 DSH Web').length === 1);
+}
+
+// ---------- 5. M2 检索注入:RetrievalPipeline + Applier ----------
+console.log('\n[5] M2 检索注入(双区):retrieval → applier');
+{
+  const dir = `/tmp/sia-m2-test-${Date.now()}`;
+  const auditDir = `/tmp/sia-m2-audit-${Date.now()}`;
+  const audit = new AuditLogger(auditDir);
+  const store = new MemoryStore({
+    writerProvider: null,
+    audit,
+    ledgerDir: dir,
+  });
+
+  // 准备账本:两条 lesson(一条高 importance 高价值,一条普通),确认 active
+  const high = store.ledger.createEntry({
+    content: 'FTP 覆盖线上文件必须先备份,再用同步脚本覆盖,且不要在提交内容中带密钥',
+    kind: 'lesson',
+    patternKey: 'ftp.先备份',
+    importance: 0.95,
+    failureCount: 3,
+    scenarios: ['FTP', 'deployment'],
+    triage: 'acknowledged',
+  });
+  store.ledger.upsert(high);
+  const low = store.ledger.createEntry({
+    content: '无关的场景 2 教训内容占位文本',
+    kind: 'lesson',
+    patternKey: 'other.unrelated',
+    importance: 0.3,
+    failureCount: 1,
+    scenarios: ['other'],
+    triage: 'acknowledged',
+  });
+  store.ledger.upsert(low);
+
+  const pipeline = new RetrievalPipeline(store.ledger, () => ({
+    coreZoneMax: 2,
+    contextZoneMax: 3,
+    maxInjectionChars: 600,
+    maxItemChars: 200,
+    enableAck: true,
+  }));
+
+  // ① pending 不注入:额外 pending lesson
+  const pending = store.ledger.createEntry({
+    content: 'pending 未确认的教训不应被注入',
+    kind: 'lesson',
+    patternKey: 'pending.x',
+    importance: 0.9,
+    failureCount: 1,
+    scenarios: ['FTP'],
+    triage: 'pending',
+  });
+  store.ledger.upsert(pending);
+  const beforeHit = store.ledger.get(high.memoryKey)?.hitCount ?? 0;
+  const build1 = pipeline.retrieve({ intent: '帮我部署文件到 FTP' });
+  assert('M2: 检索命中(FTP 意图)', build1.hit === true, JSON.stringify(build1.lessons.map((l) => l.patternKey)));
+  assert('M2: pending 教训不注入(GAP-3)', !build1.lessons.some((l) => l.memoryKey === pending.memoryKey));
+  assert('M2: 核心区含高价值教训(ftp.先备份)', build1.lessons.some((l) => l.patternKey === 'ftp.先备份' && l.zone === 'core'));
+  assert('M2: 注入块含 ack 提示', build1.block.includes('如何应用'));
+  assert('M2: 注入块含意图标记', build1.block.includes('FTP'));
+  const afterHit = store.ledger.get(high.memoryKey)?.hitCount ?? 0;
+  assert('M2: 命中后 hitCount 递增(touch)', afterHit === beforeHit + 1, `before=${beforeHit} after=${afterHit}`);
+
+  // ② 无关意图:不应有 context 区注入(核心区常驻属设计语义,允许)
+  const build2 = pipeline.retrieve({ intent: '帮我写一首诗' });
+  assert('M2: 无关意图无 context 区注入', !build2.lessons.some((l) => l.zone === 'context'), JSON.stringify(build2.lessons.map((l) => l.zone)));
+  assert('M2: 无关意图核心区仍常驻(高价值)', build2.lessons.some((l) => l.zone === 'core' && l.patternKey === 'ftp.先备份'));
+
+  // ③ 完全空账本:不注入
+  const emptyStore = new MemoryStore({ writerProvider: null, audit, ledgerDir: `/tmp/sia-m2-empty-${Date.now()}` });
+  const emptyPipe = new RetrievalPipeline(emptyStore.ledger, () => ({
+    coreZoneMax: 2, contextZoneMax: 3, maxInjectionChars: 600, maxItemChars: 200, enableAck: true,
+  }));
+  assert('M2: 空账本不注入', emptyPipe.retrieve({ intent: '任意意图' }).hit === false);
+
+  // ④ Applier 集成:pre-step payload 注入
+  const applier = new ApplierModule(
+    { on: () => {} } as never,
+    () => ({
+      applier: {
+        enableLessonInjection: true,
+        coreZoneMax: 2,
+        contextZoneMax: 3,
+        maxInjectionChars: 600,
+        maxItemChars: 200,
+        enableAck: true,
+        enableCompliance: false,
+      },
+    }) as never,
+    audit,
+    store,
+  );
+  // 手动调用内部逻辑(经公共 API:直接验证 payload 注入)
+  const payload: any = {
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: 'sys' }] },
+      { role: 'user', content: [{ type: 'text', text: '帮我部署文件到 FTP 并覆盖' }] },
+    ],
+  };
+  (applier as any).maybeInject(payload);
+  const lastContent = payload.messages[1].content;
+  const injected = lastContent.find((b: any) => b.type === 'text' && b.text.includes('经验提醒'));
+  assert('M2: applier 在 pre-step 注入提醒块(user 消息后)', Boolean(injected), JSON.stringify(lastContent));
+  assert('M2: 注入块存在且含教训文本', injected?.text.includes('FTP 覆盖线上文件必须先备份'));
 }
 
 // ---------- 辅助 ----------

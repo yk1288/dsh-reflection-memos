@@ -55,6 +55,16 @@ export const ConfigSchema = z.object({
     subagentProvider: z.string().default('opencode-go'),
     subagentModel: z.string().default('deepseek-v4-flash'),
   }),
+  // v5.0 M2:应用层/检索注入配置(O6 双区注入 + ack)
+  applier: z.object({
+    enableLessonInjection: z.boolean().default(true),
+    coreZoneMax: z.number().default(2).description('核心区教训上限(常驻高价值)'),
+    contextZoneMax: z.number().default(3).description('情境区教训上限(任务相关)'),
+    maxInjectionChars: z.number().default(600).description('单次注入总字符预算'),
+    maxItemChars: z.number().default(200).description('单条注入字符预算'),
+    enableAck: z.boolean().default(true).description('注入块附带 ack 提醒'),
+    enableCompliance: z.boolean().default(false).description('turn/end 遵守验证(预留 M2+)'),
+  }),
 });
 
 /** 配置类型(手动声明,schemastery rc 版 Schema.T 类型不完备) */
@@ -98,6 +108,15 @@ export interface Config {
     minVerifyRelativity: number;
     subagentProvider: string;
     subagentModel: string;
+  };
+  applier: {
+    enableLessonInjection: boolean;
+    coreZoneMax: number;
+    contextZoneMax: number;
+    maxInjectionChars: number;
+    maxItemChars: number;
+    enableAck: boolean;
+    enableCompliance: boolean;
   };
 }
 
@@ -143,6 +162,15 @@ export const DEFAULT_CONFIG: Config = {
     subagentProvider: 'opencode-go',
     subagentModel: 'deepseek-v4-flash',
   },
+  applier: {
+    enableLessonInjection: true,
+    coreZoneMax: 2,
+    contextZoneMax: 3,
+    maxInjectionChars: 600,
+    maxItemChars: 200,
+    enableAck: true,
+    enableCompliance: false,
+  },
 };
 
 /** 一层深合并:用户配置(loader 可能只传用户写的字段)覆盖默认值 */
@@ -152,6 +180,7 @@ function mergeConfig(base: Config, override: Partial<Config> | undefined): Confi
     reflection: { ...base.reflection, ...(override?.reflection ?? {}) },
     refiner: { ...base.refiner, ...(override?.refiner ?? {}) },
     performance: { ...base.performance, ...(override?.performance ?? {}) },
+    applier: { ...base.applier, ...(override?.applier ?? {}) },
   };
   return result;
 }

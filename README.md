@@ -41,6 +41,7 @@ DSH Session ──▶ Observer ──▶ Reflector(三审) ──▶ refiner    
 |---|---|
 | M0 结构重构 | `core/` + `backends/` 抽取,MemoryStore 门面;现有命令行为零变化 |
 | M1 单一写入闸门 | WriteGate 四审(脱敏/证据/置信度/patternKey 查重)+ 配额 + search 验证 + 审计,一次性实现 |
+| M2 教训注入预审(O6) | 统一检索管线 `RetrievalPipeline`:账本覆盖 → 双区(核心区常驻/情境区按意图)→ ack 提示;`agent/pre-step` 注入 |
 | 写入脱敏(GAP-1) | 提交 MemOS 前对 api_key/token/secret/Bearer/JWT/长blob 替换 `[REDACTED]` |
 | patternKey 去重(GAP-2) | `area.symptom` 稳定键查重,语义相同措辞不同的错误不再重复入库,复发折叠计数 |
 | pending 分流(GAP-3) | 自动链路产物默认 `triage=pending`,确认后才被召回注入 |
@@ -172,6 +173,7 @@ MEMOS_USER_ID=yk
 | `/memos-stat` | 查看记忆统计:提交数 / 入库数 / 失败数 / 事实数 / 教训数 |
 | `/evolve`(设计) | 手动演化作业(合并/更正/衰减/晋升) |
 | `/lesson-check`(设计) | 教训注入/遵守/违反一览 |
+| 遵守验证/自评(O3,O6) | 教训注入后验证是否遵守、任务自评触发深度反思(enableCompliance 预留) |
 
 ---
 
@@ -186,6 +188,7 @@ src/
 ├── core/                   # v5.0 核心抽象
 │   ├── memory-store.ts     # MemoryStore 门面(读/写/账本/统计;唯一写入口)
 │   ├── write-gate.ts       # 单一写入闸门(脱敏+三审+patternKey+配额+验证+审计)
+│   ├── retrieval.ts        # 【M2】检索/注入管线:账本覆盖→排序→双区→ack
 │   ├── ledger.ts           # 演化账本状态机(fingerprint/版本链/折叠/防循环/importance)
 │   └── redact.ts           # 写入脱敏(REDACTION_RULES,移植自 SIA 研究)
 ├── backends/
@@ -198,13 +201,15 @@ src/
 │   ├── refiner.ts          # 修正层:反思结果 → WriteGate 提交(唯一写入口门面)
 │   ├── planner.ts          # 规划层:Planner 子代理生成结构化任务计划
 │   └── executor.ts         # 执行层:runMaintenance 子任务自动推进
+├── loop/
+│   └── applier.ts          # 【M2】应用层:pre-step 教训注入 + ack + 审计
 ├── memos/client.ts         # 兼容重导出(迁移期双轨)
 ├── commands/index.ts       # /reflect /plan-and-execute /memos-stat
 ├── types/{reflection,memory,evolution}.ts
 ├── audit/logger.ts         # 审计日志(~/.dsh/reflection/audit-*.jsonl)
 └── scripts/
     ├── install.mjs         # 一键安装(构建+打包+add+patch 注入,幂等)
-    └── smoke-entry.ts      # 核心逻辑冒烟测试(27 项)
+    └── smoke-entry.ts      # 核心逻辑冒烟测试(38 项)
 ```
 
 ### DSH API 使用
@@ -248,6 +253,7 @@ src/
 - 修复 WriteGate 审计 patternKey 追溯;提交 `77527e6` 已推送 GitHub
 - 安装 `@memtensor/memos-cloud-dsh-plugin@0.1.1`;memos-cloud 召回 + 反思闭环双插件真实运行
 - 真实反思自动触发:`facts=9 lessons=3 ingested=11` 等;教训未达阈值被拒(`failureCount 1 < 2`)符合预期
+- **M2 教训注入预审完成(O6)**:`core/retrieval.ts` 双区管线 + `loop/applier.ts` pre-step 注入;smoke 扩展至 38 项全绿
 - 桌面 npx 快捷方式 + launch-web-npx.sh / launch-stop-npx.sh
 
 ### 2026-09-08(v5.0 重设计)
