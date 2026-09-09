@@ -68,6 +68,7 @@ export const ConfigSchema = z.object({
     selfEvalToolCallMin: z.number().default(3).description('自评触发最小工具调用数'),
     selfEvalFailRatio: z.number().default(0.5).description('自评失败率阈值(≥ 判低质量)'),
     correctPerDayLimit: z.number().default(5).description('memos_correct 每日上限(O1)'),
+    violateOnCompleted: z.boolean().default(true).description('O3:completed 带病完成也纳入违规(命中教训错误关键词记违反)'),
   }),
 });
 
@@ -125,6 +126,7 @@ export interface Config {
     selfEvalToolCallMin: number;
     selfEvalFailRatio: number;
     correctPerDayLimit: number;
+    violateOnCompleted: boolean;
   };
 }
 
@@ -182,6 +184,7 @@ export const DEFAULT_CONFIG: Config = {
     selfEvalToolCallMin: 3,
     selfEvalFailRatio: 0.5,
     correctPerDayLimit: 5,
+    violateOnCompleted: true,
   },
 };
 

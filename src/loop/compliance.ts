@@ -39,6 +39,7 @@ export interface ComplianceConfig {
   selfEvalToolCallMin: number;    // 触发自评的最小工具调用数
   selfEvalFailRatio: number;      // 失败率阈值(≥ 判低质量)
   keywordChars: number;           // 提取关键词最小长度
+  violateOnCompleted: boolean;    // completed 也纳入违规考量(命中教训错误关键词记违反)
 }
 
 /** 从教训文本提取轻量错误关键词(中文 2-4 字短语/英文词) */
@@ -117,9 +118,14 @@ export class ComplianceModule {
         const entry = this.store.ledger.get(rec.memoryKey);
         if (!entry || entry.kind !== 'lesson') continue;
         const kws = extractKeywords(rec.text, cfg.keywordChars);
-        // 轨迹含与教训相关的错误关键词 → violated
-        const violated = completed ? false : this.trajectoryHitsKeywords(trajectory, kws);
-        if (violated || (!completed && failedRatio >= cfg.selfEvalFailRatio)) {
+        // O3 判定(2026-09-09 强化):completed 也纳入违规考量(带病完成)。
+        // - violated:轨迹命中与教训相关的错误关键词 → 无论 completed/aborted 都记违反
+        //   (用户指令「把 completed 也纳入违规考量」;cfg.violateOnCompleted 可关回保守语义)
+        // - 任务非完成且失败率超高 → 也记违反
+        const hitsErrorTrace = this.trajectoryHitsKeywords(trajectory, kws);
+        const violated = hitsErrorTrace && (cfg.violateOnCompleted || !completed)
+          || (!completed && failedRatio >= cfg.selfEvalFailRatio);
+        if (violated) {
           entry.violationCount += 1;
           entry.hitCount += 1;
           entry.lastSeen = new Date().toISOString();
@@ -127,7 +133,7 @@ export class ComplianceModule {
           this.audit.debug('compliance', `violated ${rec.patternKey ?? rec.memoryKey.slice(0, 8)} (session ${sessionId.slice(0, 8)})`);
           this.emitLessonEvent('lesson/violated', rec, entry.violationCount);
         } else if (completed) {
-          // 完成且无相关错误 → 计遵守
+          // 完成且无教训相关错误痕迹 → 计遵守
           entry.reinforcementCount += 1;
           entry.hitCount += 1;
           entry.lastSeen = new Date().toISOString();
@@ -192,11 +198,14 @@ export class ComplianceModule {
 
   private trajectoryHitsKeywords(traces: string[], kws: string[]): boolean {
     if (kws.length === 0) return false;
-    const joined = traces.join(' ').toLowerCase();
+    const lines = traces.map((t) => t.toLowerCase());
+    // 防误报:违规判定要求"教训关键词命中 且 该行含错误迹象"。
+    // 若成功轨迹只是提到教训里的工具名(如 launch-stop.sh)但无错误,不判违反
+    // (错误迹象:报错词 / 非零退出 / 失败 / 未找到 / 拒绝等)
+    const mustHaveError = /error|failed|failure|exception|nonzero|exit code [1-9]|报错|失败|错误|not found|404|无权限|拒绝|corrupt|invalid/i;
     return kws.some((kw) => {
       if (!kw) return false;
-      // 中文关键词直接包含;稍长关键词避免误报(trace 中 3 字以上更强)
-      return kw.length >= 3 ? joined.includes(kw) : joined.includes(kw) && /失败|错误|error/.test(joined);
+      return lines.some((line) => (kw.length >= 3 ? line.includes(kw) : line.includes(kw)) && mustHaveError.test(line));
     });
   }
 

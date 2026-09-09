@@ -115,6 +115,7 @@ export function apply(ctx: Context, initialConfig: Config): void {
       selfEvalToolCallMin: getCfg().applier.selfEvalToolCallMin,
       selfEvalFailRatio: getCfg().applier.selfEvalFailRatio,
       keywordChars: 2,
+      violateOnCompleted: getCfg().applier.violateOnCompleted,
     }),
   );
 

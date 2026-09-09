@@ -505,7 +505,7 @@ console.log('\n[8] O1/O3:memory-tools + compliance');
     { on: () => {}, emit: (e: string) => { emitted.push(e); } } as never,
     audit,
     store,
-    () => ({ enableCompliance: true, enableSelfEval: true, selfEvalToolCallMin: 2, selfEvalFailRatio: 0.5, keywordChars: 2 }),
+    () => ({ enableCompliance: true, enableSelfEval: true, selfEvalToolCallMin: 2, selfEvalFailRatio: 0.5, keywordChars: 2, violateOnCompleted: true }),
   );
 
   // 注入记录
@@ -526,6 +526,26 @@ console.log('\n[8] O1/O3:memory-tools + compliance');
   ] };
   await (cm as any).handleTurnEnd(sess2, { data: { reason: { kind: 'completed' }, turn: 1 } });
   assert('O3: completed 且无相关错误 → reinforcementCount+1', store.ledger.get(lesson.memoryKey)?.reinforcementCount === 1, JSON.stringify(store.ledger.get(lesson.memoryKey)?.reinforcementCount));
+
+  // 新语义:completed 但轨迹含教训相关错误 → 也判 violated(带病完成)
+  cm.recordApplied('sess-2b', [{ memoryKey: lesson.memoryKey, patternKey: lesson.patternKey, text: lesson.contentHash }]);
+  const sess2b = { id: 'sess-2b', events: [
+    { turn: 1, type: 'tool/call', data: { name: 'bash' } },
+    { turn: 1, type: 'tool/result', data: { content: 'pkill: 自匹配导致崩溃 exit code 1,换 launch-stop 后 ok' } },
+  ] };
+  await (cm as any).handleTurnEnd(sess2b, { data: { reason: { kind: 'completed' }, turn: 1 } });
+  const v2b = store.ledger.get(lesson.memoryKey)?.violationCount ?? 0;
+  assert('O3: completed 带病完成(命中错误+教训词)也判 violated', v2b === 2, JSON.stringify({ v2b, expect: 2 }));
+
+  // 防误报:completed 且轨迹只提工具名无错误 → 不违反(遵守)
+  cm.recordApplied('sess-2c', [{ memoryKey: lesson.memoryKey, patternKey: lesson.patternKey, text: lesson.contentHash }]);
+  const sess2c = { id: 'sess-2c', events: [
+    { turn: 1, type: 'tool/call', data: { name: 'bash' } },
+    { turn: 1, type: 'tool/result', data: { content: '使用 launch-stop.sh 优雅停止完成' } },
+  ] };
+  await (cm as any).handleTurnEnd(sess2c, { data: { reason: { kind: 'completed' }, turn: 1 } });
+  const r2c = store.ledger.get(lesson.memoryKey)?.reinforcementCount ?? 0;
+  assert('O3: completed 仅提到工具名(无错误)不误判违反', r2c === 2, JSON.stringify({ r2c, expect: 2 }));
 
   // 自评:completed 但失败率高 → 触发 user-correction 事件
   cm.recordApplied('sess-3', [{ memoryKey: lesson.memoryKey, patternKey: lesson.patternKey, text: lesson.contentHash }]);
