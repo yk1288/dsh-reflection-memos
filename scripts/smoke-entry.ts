@@ -566,17 +566,17 @@ console.log('\n[8] O1/O3:memory-tools + compliance');
     () => ({ correctPerDayLimit: 2 }),
   );
   const correct = (tools as any).correctTool();
-  const r1 = await correct.run({ memoryKey: lesson.memoryKey, reason: '短' });
+  const r1 = await correct.execute({ memoryKey: lesson.memoryKey, reason: '短' });
   assert('O1: memos_correct 拒绝短 reason', r1.ok === false && String(r1.error).includes('10 字符'), JSON.stringify(r1));
-  const r2 = await correct.run({ memoryKey: lesson.memoryKey, reason: '这条教训内容已经过时需要更正为新的做法' });
+  const r2 = await correct.execute({ memoryKey: lesson.memoryKey, reason: '这条教训内容已经过时需要更正为新的做法' });
   assert('O1: memos_correct 登记 correction-request', r2.ok === true && r2.registered === 'correction-request', JSON.stringify(r2));
-  const r3 = await correct.run({ memoryKey: lesson.memoryKey, reason: '第二条更正的合理理由说明文本' });
-  const r4 = await correct.run({ memoryKey: lesson.memoryKey, reason: '第三条超过每日上限应该被拒绝' });
+  const r3 = await correct.execute({ memoryKey: lesson.memoryKey, reason: '第二条更正的合理理由说明文本' });
+  const r4 = await correct.execute({ memoryKey: lesson.memoryKey, reason: '第三条超过每日上限应该被拒绝' });
   assert('O1: memos_correct 每日上限生效(2 次后拒绝)', r4.ok === false && String(r4.error).includes('上限'), JSON.stringify(r4));
 
   // [O1] memos_lookup:只返回 active+acknowledged
   const lookup = (tools as any).lookupTool();
-  const lr = await lookup.run({ query: '重启 dsh', limit: 3 });
+  const lr = await lookup.execute({ query: '重启 dsh', limit: 3 });
   assert('O1: memos_lookup 返回已确认教训', lr.ok === true && lr.recalled.length >= 1 && lr.recalled[0].patternKey === 'shell.pkill-selfmatch', JSON.stringify(lr.recalled));
 }
 

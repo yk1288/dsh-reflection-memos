@@ -7,8 +7,10 @@
  * - memos_correct(memoryKey, reason):受限写 —— 不直接写 MemOS,只登记"更正请求"
  *   (真正的 v+1 修正走既有反思闭环);每日限量,护栏防顺手乱写
  *
- * 注:DSH 插件工具注册走 ctx.tools.register(defineTool({...})),(对齐 dsh-tool-cordis)。
- * 需要 @deepseek-ai/dsh-tools 的 defineTool;若宿主未提供,注册静默跳过(tools 不可用不影响主插件)。
+ * 实测修复(2026-09-09,用户诊断):工具注册失败根因——dsh-tools 强制
+ *   `output: { schema, render, presentationMeta? }`,且 parameters 须为"简化 spec"
+ *   ({ 字段: { type, required, description } }),不是 JSON-Schema 包装。
+ * 现按 dsh-tools defineTool 合约重写。
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { AuditLogger } from '../audit/logger';
@@ -53,6 +55,16 @@ export class MemoryTools {
     }
   }
 
+  /** 简化 spec(非 JSON-Schema 包装)+ output 合约(dsh-tools 强制) */
+  private static resultSchema(type: 'object' | 'boolean', props?: Record<string, unknown>) {
+    // boolean 类型不允许带 properties(dsh-tools 校验)
+    const schema = type === 'boolean' ? { type: 'boolean' } : { type: 'object', properties: props ?? {} };
+    return {
+      schema,
+      render: (_args: unknown, value: unknown) => String(value),
+    };
+  }
+
   // ---------- memos_lookup ----------
   private lookupTool(): unknown {
     return {
@@ -62,17 +74,17 @@ export class MemoryTools {
         '参数 query:任务意图/场景关键词;limit:返回条数(默认 3,最多 5)。' +
         '返回每条教训的 patternKey、失败次数、重要性与正文。不要在不知道经验时重复踩坑——先查。',
       parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', required: true, description: '任务意图或场景关键词' },
-          limit: { type: 'integer', required: false, description: '返回条数,默认 3' },
-        },
+        query: { type: 'string', required: true, description: '任务意图或场景关键词' },
+        limit: { type: 'integer', required: false, description: '返回条数,默认 3' },
       },
-      run: async (args: { query?: string; limit?: number }) => {
+      output: MemoryTools.resultSchema('object', {
+        ok: { type: 'boolean' },
+        recalled: { type: 'array' },
+      }),
+      execute: async (args: { query?: string; limit?: number }) => {
         const q = (args?.query ?? '').trim();
         if (!q) return { ok: false, error: 'query 不能为空' };
         const limit = Math.min(Math.max(args?.limit ?? 3, 1), 5);
-        // 复用 RetrievalPipeline 语义:active + acknowledged 才返回
         const { RetrievalPipeline } = await import('../core/retrieval');
         const ledger = this.store.ledger as EvolutionLedger;
         const pipeline = new RetrievalPipeline(ledger, () => ({
@@ -97,12 +109,10 @@ export class MemoryTools {
         '参数 patternKey:教训的 patternKey(取自 memos_lookup 或注入块)。' +
         '调用后系统记录"已声明遵守",若本轮仍违反则该教训 violation 权重×2。',
       parameters: {
-        type: 'object',
-        properties: {
-          patternKey: { type: 'string', required: true, description: '要遵守的教训 patternKey' },
-        },
+        patternKey: { type: 'string', required: true, description: '要遵守的教训 patternKey' },
       },
-      run: async (args: { patternKey?: string }) => {
+      output: MemoryTools.resultSchema('boolean'),
+      execute: async (args: { patternKey?: string }) => {
         const pk = (args?.patternKey ?? '').trim();
         if (!pk) return { ok: false, error: 'patternKey 不能为空' };
         const entry = this.store.ledger.query({ kind: 'lesson', patternKey: pk })[0];
@@ -123,13 +133,14 @@ export class MemoryTools {
         '本工具只登记更正请求(记入审计),真正 v+1 修正仍由反思闭环决定 —— 防止 agent 顺手乱写。' +
         '每日上限 5 次。',
       parameters: {
-        type: 'object',
-        properties: {
-          memoryKey: { type: 'string', required: true, description: '账本 memoryKey' },
-          reason: { type: 'string', required: true, description: '更正理由(≥10 字符)' },
-        },
+        memoryKey: { type: 'string', required: true, description: '账本 memoryKey' },
+        reason: { type: 'string', required: true, description: '更正理由(≥10 字符)' },
       },
-      run: async (args: { memoryKey?: string; reason?: string }) => {
+      output: MemoryTools.resultSchema('object', {
+        ok: { type: 'boolean' },
+        registered: { type: 'string' },
+      }),
+      execute: async (args: { memoryKey?: string; reason?: string }) => {
         const key = (args?.memoryKey ?? '').trim();
         const reason = (args?.reason ?? '').trim();
         if (!key) return { ok: false, error: 'memoryKey 不能为空' };
@@ -146,7 +157,6 @@ export class MemoryTools {
         this.correctToday += 1;
 
         this.audit.debug('memory-tools', `correct-request ${key.slice(0, 8)}: ${reason.slice(0, 60)}`);
-        // 登记 correction-request 事件;真正落库由反思闭环/人工评估(此处只审计)
         (this.ctx as any).emit('lesson/correct-request', { memoryKey: key, reason, patternKey: entry.patternKey });
         return { ok: true, registered: 'correction-request', memoryKey: key, note: '已登记,真正修正由反思闭环评估' };
       },
