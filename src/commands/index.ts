@@ -8,6 +8,9 @@ import type { ObserverModule } from '../modules/observer';
 import type { ExecutorModule } from '../modules/executor';
 import type { PlannerModule } from '../modules/planner';
 import type { SubtaskExecutionResult } from '../modules/executor';
+import type { MemoryStore } from '../core/memory-store';
+import { RetrievalPipeline } from '../core/retrieval';
+import type { ApplierModule } from '../loop/applier';
 
 export interface ReflectionModules {
   getReflector: () => ReflectorModule;
@@ -15,6 +18,8 @@ export interface ReflectionModules {
   getObserver: () => ObserverModule;
   getExecutor: () => ExecutorModule;
   getPlanner: () => PlannerModule;
+  getStore: () => MemoryStore;
+  getApplier?: () => ApplierModule;
 }
 
 export function registerCommands(
@@ -115,6 +120,50 @@ export function registerCommands(
           `- 今日写入:${stats.todayWritten}\n` +
           `- 事实记忆:${stats.factCount} 条\n` +
           `- 教训记忆:${stats.lessonCount} 条`,
+      };
+    },
+  });
+
+  // /lesson-confirm:确认待分流教训(M2)—— 将 triage=pending 的教训置为 acknowledged,使其可被检索注入
+  // 用法:/lesson-confirm [patternKey 前缀] —— 无参数时列出全部待确认教训
+  commands.register({
+    name: 'lesson-confirm',
+    description: '确认反思产出的待分流教训,使其可被检索注入(M2)',
+    input: { hint: '可选:patternKey 前缀;留空列出全部' },
+    handler: async (invocation: any) => {
+      const store = modules.getStore();
+      const pending = store.query({ kind: 'lesson', triage: 'pending' });
+      const prefix = (invocation?.rawInput ?? '').trim();
+
+      if (!prefix) {
+        if (pending.length === 0) {
+          return { kind: 'success' as const, text: '当前没有待确认的教训。' };
+        }
+        const lines = pending.map(
+          (e) => `- ${e.patternKey ?? '无key'} | 失败${e.failureCount}次 | ${(e.contentHash ?? '').slice(0, 40)}`,
+        );
+        return {
+          kind: 'success' as const,
+          text: `待确认教训 ${pending.length} 条:\n${lines.join('\n')}\n\n用法:/lesson-confirm <patternKey 前缀> 确认其中匹配的。`,
+        };
+      }
+
+      const matched = pending.filter(
+        (e) => e.patternKey && e.patternKey.startsWith(prefix),
+      );
+      if (matched.length === 0) {
+        return {
+          kind: 'error' as const,
+          text: `没有匹配 "${prefix}" 的待确认教训。`,
+        };
+      }
+      let confirmed = 0;
+      for (const e of matched) {
+        if (store.ledger.acknowledge(e.memoryKey)) confirmed += 1;
+      }
+      return {
+        kind: 'success' as const,
+        text: `已确认 ${confirmed} 条教训(可被检索注入)。`,
       };
     },
   });

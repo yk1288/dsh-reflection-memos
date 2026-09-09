@@ -167,6 +167,8 @@ export function apply(ctx: Context, initialConfig: Config): void {
     getObserver: () => observer,
     getExecutor: () => executor,
     getPlanner: () => planner,
+    getStore: () => memoryStore,
+    getApplier: () => applier,
   });
 
   // 周期反思(默认关闭)
