@@ -61,7 +61,11 @@ export class MemoryTools {
     const schema = type === 'boolean' ? { type: 'boolean' } : { type: 'object', properties: props ?? {} };
     return {
       schema,
-      render: (_args: unknown, value: unknown) => String(value),
+      // render 要返回 agent 可读文本;否则实战 tool/result 变成 "[object Object]"
+      render: (_args: unknown, value: unknown) =>
+        typeof value === 'string'
+          ? value
+          : JSON.stringify(value, null, 2),
     };
   }
 
