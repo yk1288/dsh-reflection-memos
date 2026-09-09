@@ -1,8 +1,14 @@
 /**
- * M0/M1 真实 MemOS 验证脚本(临时,验证后清理)
+ * E2E 真实 MemOS 验证脚本(v5.0,正式保留)
  * 链路:MemoryStore.submit → WriteGate(四审+脱敏+patternKey查重+配额) → MemOSWriter → 真实 MemOS add/message
  *      → 轮询 search 验证召回;同时落本地账本(triage=pending)+ 审计(gate:write-gate)
- * 用独立 conversation_id 避免污染生产 dsh:reflection。
+ * 用独立 conversation_id('dsh:m0-verify')避免污染生产 dsh:reflection。
+ *
+ * 运行:
+ *   MEMOS_API_KEY=<key> MEMOS_USER_ID=yk MEMOS_BASE_URL=https://memos.memtensor.cn/api/openmem/v1 \
+ *   node <bundle>/e2e-memos-verify.js
+ * 会向真实 MemOS 写入 1 条 fact + 1 条 lesson(含假密钥验证脱敏),验证后建议通过
+ * MemOS Dashboard 清理 'dsh:m0-verify' 会话下的测试记忆(或保留作为闭环样例)。
  */
 import { MemoryStore } from '../src/core/memory-store';
 import { AuditLogger } from '../src/audit/logger';
