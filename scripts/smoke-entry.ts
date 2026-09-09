@@ -560,6 +560,46 @@ console.log('\n[8] O1/O3:memory-tools + compliance');
   assert('O1: memos_lookup 返回已确认教训', lr.ok === true && lr.recalled.length >= 1 && lr.recalled[0].patternKey === 'shell.pkill-selfmatch', JSON.stringify(lr.recalled));
 }
 
+// ---------- 9. O5/O2:黄金路径即时晋升 + 轨迹级会话整合 ----------
+console.log('\n[9] O5/O2:harvest + synthesizeTrajectory');
+{
+  const dir = `/tmp/sia-o5-test-${Date.now()}`;
+  const audit = new AuditLogger(`/tmp/sia-o5-audit-${Date.now()}`);
+  const store = new MemoryStore({ writerProvider: null, audit, ledgerDir: dir });
+  const evolver = new EvolverModule({} as never, () => ({}) as never, audit, store, () => ({
+    decayAfterDays: 30, archiveAfterDays: 60, importanceBoostFactor: 3,
+    minReinforcementForPromotion: 3, maxViolationRateForPromotion: 0.2,
+    skillsDir: `/tmp/sia-o5-skills-${Date.now()}`,
+  }));
+
+  // O5a:不满足条件(工具调用<3) → 不收割
+  const r1 = await evolver.harvestGoldenPath({ sessionId: 's1', scenario: 'x', toolCalls: 2, hadFallback: true, success: true });
+  assert('O5: 工具调用<3 不收割黄金路径', r1.harvested === false, JSON.stringify(r1));
+
+  // O5b:满足且 autoUpdateSkills → 生成 Skill + lesson
+  const skillsDir = `/tmp/sia-o5-skills-${Date.now()}`;
+  const evolver2 = new EvolverModule({} as never, () => ({}) as never, audit, store, () => ({
+    decayAfterDays: 30, archiveAfterDays: 60, importanceBoostFactor: 3,
+    minReinforcementForPromotion: 3, maxViolationRateForPromotion: 0.2, skillsDir,
+  }));
+  const r2 = await evolver2.harvestGoldenPath({ sessionId: 's2', scenario: 'DSH 重启', toolCalls: 4, hadFallback: true, success: true, autoUpdateSkills: true });
+  assert('O5: 黄金路径收割生成 Skill + 账本 lesson', r2.harvested === true && !!r2.skillPath && store.ledger.query({ kind: 'lesson' }).length === 1, JSON.stringify(r2));
+  assert('O5: Skill 文件存在', r2.skillPath ? fs.existsSync(r2.skillPath) : false);
+
+  // O5c:成功但无试错→修正信号 → 不收割
+  const r3 = await evolver2.harvestGoldenPath({ sessionId: 's3', scenario: 'y', toolCalls: 4, hadFallback: false, success: true });
+  assert('O5: 无试错信号不收割', r3.harvested === false, JSON.stringify(r3));
+
+  // O5d:失败 → 不收割
+  const r4 = await evolver2.harvestGoldenPath({ sessionId: 's4', scenario: 'z', toolCalls: 4, hadFallback: true, success: false });
+  assert('O5: 任务失败不收割', r4.harvested === false, JSON.stringify(r4));
+
+  // O2:轨迹级会话整合
+  const key = await evolver2.synthesizeTrajectory({ scenario: 'FTP 部署', steps: ['备份', '同步'], pitfall: '先备份再覆盖', outcome: '成功' });
+  const ep = store.ledger.get(key);
+  assert('O2: synthesizeTrajectory 生成 episodic(scenario/pitfall/outcome)', !!ep && ep.kind === 'episodic' && ep.contentHash.includes('FTP 部署') && ep.contentHash.includes('先备份再覆盖'), JSON.stringify(ep?.contentHash ?? null));
+}
+
 // ---------- 辅助 ----------
 const minimum = {
   evidenceMinChars: 20,

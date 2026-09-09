@@ -219,4 +219,76 @@ export class EvolverModule {
     this.store.ledger.upsert(ep);
     return 1;
   }
+
+  // ---------- O2 增强:轨迹级会话整合(带 scenario/steps/pitfall/outcome) ----------
+  /**
+   * 把"一条真实任务轨迹"(turn/end 采集)压缩为 episodic 条目。
+   * 输入:observer 缓存的关键事件摘要(可选);无轨迹时回落账本统计(m3 轻量)。
+   * 输出:kind=episodic,内容含 scenario/steps/pitfall/outcome(150 字内意图)。
+   */
+  async synthesizeTrajectory(trajectory?: { scenario?: string; steps?: string[]; pitfall?: string; outcome?: string }): Promise<string> {
+    const t = trajectory ?? {};
+    const scenario = (t.scenario ?? 'general').slice(0, 40);
+    const steps = (t.steps ?? []).slice(0, 4);
+    const content = [
+      `Episodic(${scenario})`,
+      t.pitfall ? `坑:${t.pitfall.slice(0, 60)}` : '',
+      `结果:${(t.outcome ?? 'unknown').slice(0, 40)}`,
+      ...(steps.length ? ['步骤:', ...steps.map((s) => `- ${s.slice(0, 40)}`)] : []),
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const ep = this.store.ledger.createEntry({
+      content,
+      kind: 'episodic',
+      importance: 0.5,
+      triage: 'acknowledged',
+      note: 'source=evolver-synthesize-trajectory',
+    });
+    this.store.ledger.upsert(ep);
+    this.audit.debug('evolve', `synthesize-trajectory → ${ep.memoryKey.slice(0, 8)}(${scenario})`);
+    return ep.memoryKey;
+  }
+
+  // ---------- O5 黄金路径即时晋升(Golden-path Harvesting) ----------
+  /**
+   * 在任务成功(turn/end completed)且轨迹"尝试→修正→成功"时,即时生成 Skill 草案。
+   * 判定:事件流含 ≥minCalls 次工具调用、首 tail 有 error 后最终 completed(goldenPath 启发式)。
+   * 命中 → 写 Skill(若 autoUpdateSkills)或返回"待确认 Skill"草案供 /evolve --promote。
+   */
+  async harvestGoldenPath(input: {
+    sessionId: string;
+    scenario: string;
+    toolCalls: number;
+    hadFallback: boolean; // 轨迹含"试错→修正"信号
+    success: boolean;
+    autoUpdateSkills?: boolean;
+  }): Promise<{ harvested: boolean; skillPath?: string; draft?: { name: string; rule: string } }> {
+    if (!input.success) return { harvested: false };
+    if (input.toolCalls < 3) return { harvested: false }; // 条件:≥3 次工具调用
+    if (!input.hadFallback) return { harvested: false }; // 条件:存在试错→修正
+
+    const rule = `当任务涉及「${input.scenario.slice(0, 40)}」时,先按已走通的路径执行(存在试错→修正信号),避免重复试错。`;
+    if (input.autoUpdateSkills ?? false) {
+      const name = `golden-${input.scenario.replace(/[^a-z0-9\u4e00-\u9fa5-]/g, '-').slice(0, 24) || 'path'}`;
+      const entry = this.store.ledger.createEntry({
+        content: rule,
+        kind: 'lesson', // golden path 本质是可复用做法,以 lesson 落账本
+        patternKey: `golden.${input.scenario.slice(0, 12)}`,
+        importance: 0.8,
+        failureCount: 1,
+        triage: 'acknowledged',
+        note: `source=harvest-golden-path session=${input.sessionId.slice(0, 8)}`,
+      });
+      this.store.ledger.upsert(entry);
+      const skillPath = this.writeSkill(name, entry);
+      this.audit.debug('evolve', `harvest golden path → ${skillPath}`);
+      return { harvested: true, skillPath };
+    }
+    // 不自动写 → 返回草案(供 /evolve --promote 或人工确认)
+    return {
+      harvested: true,
+      draft: { name: 'golden-' + input.scenario.slice(0, 12), rule },
+    };
+  }
 }
