@@ -224,32 +224,32 @@ export function registerCommands(
       return { kind: 'success' as const, text: reporter.format(report) };
     },
   });
-}
 
-// /lesson-check:教训注入/遵守/违反一览(O3 可观测性)
-// 用法:/lesson-check —— 显示账本中已确认教训的学习效果(reinforcement/violation)与注入次数
-commands.register({
-  name: 'lesson-check',
-  description: '查看教训注入/遵守/违反情况(O3)',
-  handler: async () => {
-    const store = modules.getStore();
-    if (!store) return { kind: 'error' as const, text: 'store 服务不可用。' };
-    const lessons = store.query({ kind: 'lesson' });
-    const acked = lessons.filter((l) => l.triage !== 'pending');
-    const withEffect = acked.filter((l) => l.reinforcementCount > 0 || l.violationCount > 0 || l.hitCount > 0);
-    const lines = [
-      `教训一览(${lessons.length} 条;已确认 ${acked.length}):`,
-      `- 有学习效果记录(遵守/违反/命中):${withEffect.length} 条`,
-      '',
-      ...withEffect
-        .slice(0, 8)
-        .map((l) =>
-          `· ${l.patternKey ?? '无key'} | 命中${l.hitCount} 遵守${l.reinforcementCount} 违反${l.violationCount} | ${l.contentHash.slice(0, 40)}`,
-        ),
-    ];
-    if (withEffect.length === 0) {
-      lines.push('(尚无遵守/违反记录 —— 需启用 applier.enableCompliance 后观察)');
-    }
-    return { kind: 'success' as const, text: lines.join('\n') };
-  },
-});
+  // /lesson-check:教训注入/遵守/违反一览(O3 可观测性)
+  // 用法:/lesson-check —— 显示账本中已确认教训的学习效果(reinforcement/violation)与注入次数
+  commands.register({
+    name: 'lesson-check',
+    description: '查看教训注入/遵守/违反情况(O3)',
+    handler: async () => {
+      const store = modules.getStore();
+      if (!store) return { kind: 'error' as const, text: 'store 服务不可用。' };
+      const lessons = store.query({ kind: 'lesson' });
+      const acked = lessons.filter((l) => l.triage !== 'pending');
+      const withEffect = acked.filter((l) => l.reinforcementCount > 0 || l.violationCount > 0 || l.hitCount > 0);
+      const lines = [
+        `教训一览(${lessons.length} 条;已确认 ${acked.length}):`,
+        `- 有学习效果记录(遵守/违反/命中):${withEffect.length} 条`,
+        '',
+        ...withEffect
+          .slice(0, 8)
+          .map((l) =>
+            `· ${l.patternKey ?? '无key'} | 命中${l.hitCount} 遵守${l.reinforcementCount} 违反${l.violationCount} | ${l.contentHash.slice(0, 40)}`,
+          ),
+      ];
+      if (withEffect.length === 0) {
+        lines.push('(尚无遵守/违反记录 —— 需启用 applier.enableCompliance 后观察)');
+      }
+      return { kind: 'success' as const, text: lines.join('\n') };
+    },
+  });
+}

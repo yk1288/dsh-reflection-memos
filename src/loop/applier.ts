@@ -18,6 +18,7 @@ import type { AuditLogger } from '../audit/logger';
 import { RetrievalPipeline } from '../core/retrieval';
 import type { MemoryStore } from '../core/memory-store';
 import type { ComplianceModule } from './compliance';
+import { asAppliedRecord } from './compliance'; // 值导入,防 rollup tree-shake 误删
 
 export class ApplierModule {
   constructor(
@@ -129,4 +130,3 @@ export interface AppliedLessonInput {
   patternKey?: string;
   text: string;
 }
-export { asAppliedRecord } from './compliance';
