@@ -51,14 +51,16 @@ export function extractKeywords(text: string, minLen = 2, max = 16): string[] {
   for (const m of t.match(/[a-zA-Z0-9_-]{3,}/g) ?? []) {
     enWords.add(m.toLowerCase());
   }
-  // 中文:2-4 字滑动片段,排除停用词
+  // 通用停用词/弱语义片段,排除后可大幅降噪(#4)
+  const WEAK = /^(不要|应当|必须|避免|应该|需要|因为|所以|以及|并且|或者|如果|然后|最后|这个|那个|一个|直接|确认|进行|可以|需要|先|后|中|的|了|是|在|不|来|用|从|即|并|也|都|很|再|还|已|未|无|能|会|要|到|成|及|与|和|或)$/;
+  // 中文:2-4 字滑动片段,排除弱词/纯组合前缀
   const zh = t.replace(/[^一-鿿]/g, ' ');
   for (const seg of zh.split(/\s+/).filter((s) => s.length >= 2)) {
     const maxLen = Math.min(4, seg.length);
     for (let len = minLen; len <= maxLen; len++) {
       for (let i = 0; i + len <= seg.length; i++) {
         const frag = seg.slice(i, i + len);
-        if (!/^(不要|应当|必须|避免|应该|需要|因为|所以|以及|并且|或者|如果|然后|最后|这个|那个|一个)$/.test(frag)) {
+        if (!WEAK.test(frag)) {
           zhWords.add(frag);
         }
       }
@@ -130,8 +132,11 @@ export class ComplianceModule {
         // - violated:轨迹命中与教训相关的错误关键词 → 无论 completed/aborted 都记违反
         //   (用户指令「把 completed 也纳入违规考量」;cfg.violateOnCompleted 可关回保守语义)
         // - 任务非完成且失败率超高 → 也记违反
+        // - 误报收紧(#3):轨迹存在"纠错成功信号"(exit 0/成功/验证通过/修复)时,
+        //   视为教训被"遵守后仍试错但最终纠偏",不判违规(降误报)
         const hitsErrorTrace = this.trajectoryHitsKeywords(trajectory, kws);
-        const violated = hitsErrorTrace && (cfg.violateOnCompleted || !completed)
+        const hasSuccessFix = this.trajectoryHasSuccessFix(trajectory);
+        const violated = hitsErrorTrace && hasSuccessFix === false && (cfg.violateOnCompleted || !completed)
           || (!completed && failedRatio >= cfg.selfEvalFailRatio);
         if (violated) {
           entry.violationCount += 1;
@@ -215,6 +220,12 @@ export class ComplianceModule {
       if (!kw) return false;
       return lines.some((line) => (kw.length >= 3 ? line.includes(kw) : line.includes(kw)) && mustHaveError.test(line));
     });
+  }
+
+  /** 轨迹是否存在"纠错成功信号"(#3 误报收紧):exit 0 / 成功 / 验证通过 / 修复完成 */
+  private trajectoryHasSuccessFix(traces: string[]): boolean {
+    const joined = traces.join(' ').toLowerCase();
+    return /exit code 0|exit 0|成功|验证通过|修复完成|已修复|succeeded|all ok|完成。|解决/.test(joined);
   }
 
   private emitLessonEvent(eventName: string, rec: AppliedLessonRecord, count: number): void {

@@ -663,6 +663,61 @@ console.log('\n[10] #1#2:autoAcknowledge + 批量确认');
   assert('#2: 前缀筛选 mid.* 命中', byPrefix.length === 1 && byPrefix[0].patternKey === 'mid.b');
 }
 
+// ---------- 11. #3#4#6#7:误报收紧/去噪/persona/correct 闭环 ----------
+console.log('\n[11] #3-#7 优化项');
+{
+  // #4:extractKeywords 去噪 —— 排除通用词(直接/确认/进行),保留语义词
+  const kws4 = extractKeywords('先确认配置再执行,不要直接覆盖线上文件', 2);
+  assert('#4: 中文去噪排除通用词(直接/确认)', !kws4.includes('直接') && !kws4.includes('确认'), JSON.stringify(kws4));
+  assert('#4: 保留语义词(覆盖/执行/线上)', kws4.some((k) => ['覆盖', '线上', '执行'].includes(k)), JSON.stringify(kws4));
+
+  // #3:误报收紧 —— 轨迹含"成功修复信号"时 completed 不判违规
+  const dir = `/tmp/sia-opt-test-${Date.now()}`;
+  const audit = new AuditLogger(`/tmp/sia-opt-audit-${Date.now()}`);
+  const store = new MemoryStore({ writerProvider: null, audit, ledgerDir: dir });
+  const lesson = store.ledger.createEntry({ content: 'pkill 自匹配问题,应用 launch-stop.sh', kind: 'lesson', patternKey: 'shell.pkill', importance: 0.9, failureCount: 2, triage: 'acknowledged' });
+  store.ledger.upsert(lesson);
+  const cm = new ComplianceModule({ on: () => {}, emit: () => {} } as never, audit, store, () => ({
+    enableCompliance: true, enableSelfEval: true, selfEvalToolCallMin: 3, selfEvalFailRatio: 0.5, keywordChars: 2, violateOnCompleted: true,
+  }));
+  // 带错误但随后成功修复 → 不判违规(成功信号优先级)
+  cm.recordApplied('fix-sess', [{ memoryKey: lesson.memoryKey, patternKey: lesson.patternKey, text: lesson.contentHash }]);
+  const fixSess = { id: 'fix-sess', events: [
+    { turn: 1, type: 'tool/call', data: { name: 'bash' } },
+    { turn: 1, type: 'tool/result', data: { content: 'pkill 自匹配 exit code 1,改用 launch-stop.sh 后 exit code 0 成功' } },
+  ] };
+  await (cm as any).handleTurnEnd(fixSess, { data: { reason: { kind: 'completed' }, turn: 1 } });
+  assert('#3: 纠错成功(exit 0)不判违规', store.ledger.get(lesson.memoryKey)?.violationCount === 0, JSON.stringify(store.ledger.get(lesson.memoryKey)?.violationCount));
+
+  // 带错误且无成功信号 → 判违规
+  cm.recordApplied('bad-sess', [{ memoryKey: lesson.memoryKey, patternKey: lesson.patternKey, text: lesson.contentHash }]);
+  const badSess = { id: 'bad-sess', events: [
+    { turn: 1, type: 'tool/call', data: { name: 'bash' } },
+    { turn: 1, type: 'tool/result', data: { content: 'pkill 自匹配 exit code 1,仍崩溃' } },
+  ] };
+  await (cm as any).handleTurnEnd(badSess, { data: { reason: { kind: 'completed' }, turn: 1 } });
+  assert('#3: 无成功信号仍判违规', store.ledger.get(lesson.memoryKey)?.violationCount === 1, JSON.stringify(store.ledger.get(lesson.memoryKey)?.violationCount));
+
+  // #6:persona 强化标记(源码字符串断言;顶部已 import fs)
+  const src = fs.readFileSync('/data/home/huangwei/py/dsh-reflection-memos/src/modules/reflector.ts', 'utf-8');
+  assert('#6: Reviewer persona 含"仅一个 JSON 对象"强约束', src.includes('仅一个 JSON 对象') && src.includes('第一个字符必须是'));
+
+  // #7:correct-request → 账本 v+1 修正(模拟 index 闭包逻辑)
+  const old = store.ledger.get(lesson.memoryKey)!;
+  const corrected = store.ledger.createEntry({
+    content: old.contentHash + ' [更正] 实际应优先 launch-stop',
+    kind: 'lesson', patternKey: old.patternKey, importance: old.importance,
+    failureCount: old.failureCount, scenarios: old.scenarios, triage: old.triage,
+  });
+  corrected.supersedes = [old.memoryKey];
+  store.ledger.upsert(corrected);
+  old.status = 'superseded';
+  old.supersededBy = corrected.memoryKey;
+  store.ledger.upsert(old);
+  const cNew = store.ledger.get(corrected.memoryKey)!;
+  assert('#7: correct 生成 v+1 新版本且旧版 superseded', cNew.contentHash.includes('更正') && store.ledger.get(old.memoryKey)?.status === 'superseded');
+}
+
 // ---------- 辅助 ----------
 const minimum = {
   evidenceMinChars: 20,

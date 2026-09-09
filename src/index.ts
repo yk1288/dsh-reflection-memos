@@ -225,6 +225,44 @@ export function apply(ctx: Context, initialConfig: Config): void {
     }, intervalMs);
   }
 
+  // v5.0 #5:周期演化(默认每日,自动 decay + autoAcknowledge 治理 pending 积压)
+  // 幂等且轻量:无用户交互,不阻塞主流程
+  (ctx as any).setInterval(() => {
+    evolver
+      .run({ decay: true, autoAcknowledge: true })
+      .catch((error: unknown) => ctx.logger.warn(`周期演化失败: ${String(error)}`));
+  }, 24 * 60 * 60 * 1000);
+  ctx.logger.info('dsh-reflection-memos: 周期演化已启用(每日 decay+autoAcknowledge)');
+
+  // v5.0 #7:memos_correct 闭环 —— correction-request 事件 → 账本 v+1 修正
+  // (agent 受限写:仅改账本本地版本,不写 MemOS;旧版本 superseded,纠正后可被 m2 注入)
+  (ctx as any).on('lesson/correct-request', (payload: any) => {
+    try {
+      if (!payload?.memoryKey) return;
+      const old = memoryStore.ledger.get(payload.memoryKey);
+      if (!old || old.kind !== 'lesson') return;
+      // 构造更正后的新版本(内容 = 原教训 + 更正说明;patternKey/failureCount 保留)
+      const corrected = memoryStore.ledger.createEntry({
+        content: `${old.contentHash}\n[更正 ${new Date().toISOString().slice(0, 16)}] ${String(payload.reason ?? '').slice(0, 200)}`,
+        kind: 'lesson',
+        patternKey: old.patternKey,
+        importance: old.importance,
+        failureCount: Math.max(old.failureCount, 1),
+        scenarios: old.scenarios,
+        triage: old.triage,
+        note: `${old.note ?? ''} corrected-v${old.version + 1}`,
+      });
+      corrected.supersedes = [old.memoryKey];
+      memoryStore.ledger.upsert(corrected);
+      old.status = 'superseded';
+      old.supersededBy = corrected.memoryKey;
+      memoryStore.ledger.upsert(old);
+      audit.debug('memory-tools', `correct 已落地: ${old.memoryKey.slice(0, 8)} → ${corrected.memoryKey.slice(0, 8)}`);
+    } catch (error) {
+      audit.debug('memory-tools', `correct 落地失败: ${String(error)}`);
+    }
+  });
+
   // 暴露服务供其他插件调用(带前缀命名,防冲突)
   (ctx as any).provide('reflectionMemos', {
     reflect: (obs: never, level: string) => reflector.reflect(obs, level),
