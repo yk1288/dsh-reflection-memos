@@ -42,26 +42,30 @@ export interface ComplianceConfig {
   violateOnCompleted: boolean;    // completed 也纳入违规考量(命中教训错误关键词记违反)
 }
 
-/** 从教训文本提取轻量错误关键词(中文 2-4 字短语/英文词) */
-export function extractKeywords(text: string, minLen = 2): string[] {
+/** 从教训文本提取轻量错误关键词(中文短语优先,英文词次之) */
+export function extractKeywords(text: string, minLen = 2, max = 16): string[] {
   const t = text ?? '';
-  const kws: string[] = [];
-  // 英文/数字词
+  const zhWords = new Set<string>();
+  const enWords = new Set<string>();
+  // 英文/数字词(领域性强,优先保留)
   for (const m of t.match(/[a-zA-Z0-9_-]{3,}/g) ?? []) {
-    kws.push(m.toLowerCase());
+    enWords.add(m.toLowerCase());
   }
-  // 中文:连续 2-4 字片段(排除停用词头尾)
+  // 中文:2-4 字滑动片段,排除停用词
   const zh = t.replace(/[^一-鿿]/g, ' ');
-  const segments = zh.split(/\s+/).filter((s) => s.length >= 2);
-  for (const seg of segments) {
-    for (let i = 0; i + minLen <= seg.length; i++) {
-      const frag = seg.slice(i, i + minLen);
-      if (frag.length >= minLen && !/^(不要|应当|必须|避免|应该|需要|因为|所以|以及|并且|或者|如果|然后|最后)$/.test(frag)) {
-        kws.push(frag);
+  for (const seg of zh.split(/\s+/).filter((s) => s.length >= 2)) {
+    const maxLen = Math.min(4, seg.length);
+    for (let len = minLen; len <= maxLen; len++) {
+      for (let i = 0; i + len <= seg.length; i++) {
+        const frag = seg.slice(i, i + len);
+        if (!/^(不要|应当|必须|避免|应该|需要|因为|所以|以及|并且|或者|如果|然后|最后|这个|那个|一个)$/.test(frag)) {
+          zhWords.add(frag);
+        }
       }
     }
   }
-  return [...new Set(kws)].slice(0, 12);
+  // 英文优先(领域词),再补中文片段;总名额 max
+  return [...enWords, ...zhWords].slice(0, max);
 }
 
 export class ComplianceModule {
@@ -117,7 +121,11 @@ export class ComplianceModule {
       for (const rec of applied) {
         const entry = this.store.ledger.get(rec.memoryKey);
         if (!entry || entry.kind !== 'lesson') continue;
-        const kws = extractKeywords(rec.text, cfg.keywordChars);
+        // 关键词:教训正文 + patternKey 分词(补召回键,提升命中稳定性)
+        const kws = [
+          ...extractKeywords(rec.text, cfg.keywordChars),
+          ...extractKeywords(rec.patternKey ?? '', cfg.keywordChars),
+        ].slice(0, 20);
         // O3 判定(2026-09-09 强化):completed 也纳入违规考量(带病完成)。
         // - violated:轨迹命中与教训相关的错误关键词 → 无论 completed/aborted 都记违反
         //   (用户指令「把 completed 也纳入违规考量」;cfg.violateOnCompleted 可关回保守语义)
