@@ -74,9 +74,12 @@ export class ComplianceModule {
     private config: () => ComplianceConfig,
   ) {
     const anyCtx = this.ctx as any;
-    anyCtx.on('turn/end', async (session: any, event: any) => {
+    // ⚠️ 修复(实测):DSH 明细事件流是 session/event(内含 turn/end 子事件),
+    // 不是顶层 turn/end 事件 —— 此前订阅错事件名导致 handleTurnEnd 从未触发
+    anyCtx.on('session/event', (session: any, event: any) => {
+      if (!event || event.type !== 'turn/end') return;
       try {
-        await this.handleTurnEnd(session, event);
+        void this.handleTurnEnd(session, event);
       } catch (e) {
         this.audit.debug('compliance', `turn/end 处理失败: ${String(e)}`);
       }
