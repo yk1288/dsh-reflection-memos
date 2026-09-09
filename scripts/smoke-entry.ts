@@ -18,6 +18,8 @@ import type { WriteGateConfig } from '../src/core/write-gate';
 import { MemoryStore } from '../src/core/memory-store';
 import { RetrievalPipeline } from '../src/core/retrieval';
 import { ApplierModule } from '../src/loop/applier';
+import { ComplianceModule, extractKeywords } from '../src/loop/compliance';
+import { MemoryTools } from '../src/tools/memory-tools';
 import { EvolverModule } from '../src/loop/evolver';
 import { ReporterModule } from '../src/loop/reporter';
 import { RefinerModule } from '../src/modules/refiner';
@@ -339,6 +341,10 @@ console.log('\n[5] M2 检索注入(双区):retrieval → applier');
         maxItemChars: 200,
         enableAck: true,
         enableCompliance: false,
+        enableSelfEval: false,
+        selfEvalToolCallMin: 3,
+        selfEvalFailRatio: 0.5,
+        correctPerDayLimit: 5,
       },
     }) as never,
     audit,
@@ -471,6 +477,87 @@ console.log('\n[7] M4 闭环度量/报告:reporter');
   assert('M4: 元优化建议生成(遵守/复发/高风险)', r.recommendations.length >= 2, JSON.stringify(r.recommendations));
   const text = reporter.format(r);
   assert('M4: 命令可读格式含指标', text.includes('遵守率') && text.includes('复发率') && text.includes('建议'));
+}
+
+// ---------- 8. O1/O3:记忆工具 + 遵守验证 ----------
+console.log('\n[8] O1/O3:memory-tools + compliance');
+{
+  // [O3a] extractKeywords:从教训文本提取中文关键词(排除停用词)
+  const kws = extractKeywords('FTP 覆盖先备份再覆盖,不要在提交内容中带密钥', 2);
+  assert('O3: extractKeywords 提取关键词(含非停用词)', kws.some((k) => k.includes('FTP') || k.includes('覆盖')), JSON.stringify(kws));
+  assert('O3: extractKeywords 排除停用词(不要/避免)', !kws.includes('不要') && !kws.includes('避免'), JSON.stringify(kws));
+
+  // [O3b] compliance:注入教训 + turn/end 判定
+  const dir = `/tmp/sia-o3-test-${Date.now()}`;
+  const auditDir = `/tmp/sia-o3-audit-${Date.now()}`;
+  const audit = new AuditLogger(auditDir);
+  const store = new MemoryStore({ writerProvider: null, audit, ledgerDir: dir });
+  // 一条已确认教训
+  const lesson = store.ledger.createEntry({
+    content: 'pkill 存在自匹配问题,重启 dsh 应用 launch-stop.sh 而不是裸 pkill',
+    kind: 'lesson', patternKey: 'shell.pkill-selfmatch', importance: 0.9,
+    failureCount: 2, triage: 'acknowledged',
+  });
+  store.ledger.upsert(lesson);
+
+  const emitted: string[] = [];
+  const cm = new ComplianceModule(
+    { on: () => {}, emit: (e: string) => { emitted.push(e); } } as never,
+    audit,
+    store,
+    () => ({ enableCompliance: true, enableSelfEval: true, selfEvalToolCallMin: 2, selfEvalFailRatio: 0.5, keywordChars: 2 }),
+  );
+
+  // 注入记录
+  cm.recordApplied('sess-1', [{ memoryKey: lesson.memoryKey, patternKey: lesson.patternKey, text: lesson.contentHash }]);
+  // turn/end:completed 且轨迹含 pkill 错误 → 判 violated
+  const sessionStub = { id: 'sess-1', events: [
+    { turn: 1, type: 'tool/call', data: { name: 'bash' } },
+    { turn: 1, type: 'tool/result', data: { content: 'pkill: 自匹配导致崩溃 exit code 1' } },
+  ] };
+  await (cm as any).handleTurnEnd(sessionStub, { data: { reason: { kind: 'aborted' }, turn: 1 } });
+  assert('O3: 轨迹含相关错误 → lesson violationCount+1', store.ledger.get(lesson.memoryKey)?.violationCount === 1, JSON.stringify(store.ledger.get(lesson.memoryKey)?.violationCount));
+
+  // 遵守路径:completed 且轨迹无该教训错误
+  cm.recordApplied('sess-2', [{ memoryKey: lesson.memoryKey, patternKey: lesson.patternKey, text: lesson.contentHash }]);
+  const sess2 = { id: 'sess-2', events: [
+    { turn: 1, type: 'tool/call', data: { name: 'bash' } },
+    { turn: 1, type: 'tool/result', data: { content: 'launch-stop.sh 优雅停止 ok' } },
+  ] };
+  await (cm as any).handleTurnEnd(sess2, { data: { reason: { kind: 'completed' }, turn: 1 } });
+  assert('O3: completed 且无相关错误 → reinforcementCount+1', store.ledger.get(lesson.memoryKey)?.reinforcementCount === 1, JSON.stringify(store.ledger.get(lesson.memoryKey)?.reinforcementCount));
+
+  // 自评:completed 但失败率高 → 触发 user-correction 事件
+  cm.recordApplied('sess-3', [{ memoryKey: lesson.memoryKey, patternKey: lesson.patternKey, text: lesson.contentHash }]);
+  const sess3 = { id: 'sess-3', events: [
+    { turn: 1, type: 'tool/call', data: { name: 'bash' } },
+    { turn: 1, type: 'tool/result', data: { content: 'error: 失败1' } },
+    { turn: 1, type: 'tool/call', data: { name: 'bash' } },
+    { turn: 1, type: 'tool/result', data: { content: 'error: 失败2' } },
+  ] };
+  await (cm as any).handleTurnEnd(sess3, { data: { reason: { kind: 'completed' }, turn: 1 } });
+  assert('O3: 低质量完成自评触发反思(calls≥2 fail≥0.5)', emitted.includes('reflection/user-correction'), JSON.stringify(emitted));
+
+  // [O1] memos_correct 护栏:reason 短拒绝 + 每日上限
+  const tools = new MemoryTools(
+    { emit: () => {} } as never,
+    audit,
+    store,
+    () => ({ correctPerDayLimit: 2 }),
+  );
+  const correct = (tools as any).correctTool();
+  const r1 = await correct.run({ memoryKey: lesson.memoryKey, reason: '短' });
+  assert('O1: memos_correct 拒绝短 reason', r1.ok === false && String(r1.error).includes('10 字符'), JSON.stringify(r1));
+  const r2 = await correct.run({ memoryKey: lesson.memoryKey, reason: '这条教训内容已经过时需要更正为新的做法' });
+  assert('O1: memos_correct 登记 correction-request', r2.ok === true && r2.registered === 'correction-request', JSON.stringify(r2));
+  const r3 = await correct.run({ memoryKey: lesson.memoryKey, reason: '第二条更正的合理理由说明文本' });
+  const r4 = await correct.run({ memoryKey: lesson.memoryKey, reason: '第三条超过每日上限应该被拒绝' });
+  assert('O1: memos_correct 每日上限生效(2 次后拒绝)', r4.ok === false && String(r4.error).includes('上限'), JSON.stringify(r4));
+
+  // [O1] memos_lookup:只返回 active+acknowledged
+  const lookup = (tools as any).lookupTool();
+  const lr = await lookup.run({ query: '重启 dsh', limit: 3 });
+  assert('O1: memos_lookup 返回已确认教训', lr.ok === true && lr.recalled.length >= 1 && lr.recalled[0].patternKey === 'shell.pkill-selfmatch', JSON.stringify(lr.recalled));
 }
 
 // ---------- 辅助 ----------

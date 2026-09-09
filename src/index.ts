@@ -13,8 +13,10 @@ import { registerCommands } from './commands';
 import { AuditLogger } from './audit/logger';
 import { MemoryStore } from './core/memory-store';
 import { ApplierModule } from './loop/applier';
+import { ComplianceModule } from './loop/compliance';
 import { EvolverModule } from './loop/evolver';
 import { ReporterModule } from './loop/reporter';
+import { MemoryTools } from './tools/memory-tools';
 import { RetrievalPipeline } from './core/retrieval';
 import { MemOSWriter } from './backends/memos-backend';
 import { resolveMemOSApiKey } from './backends/api-key';
@@ -101,8 +103,27 @@ export function apply(ctx: Context, initialConfig: Config): void {
   });
   const refiner = new RefinerModule(ctx, getCfg, audit, memoryStore);
 
+  // v5.0 O3:遵守验证 + 自评(compliance 先建,applier 注入后登记)
+  const compliance = new ComplianceModule(
+    ctx,
+    audit,
+    memoryStore,
+    () => ({
+      enableCompliance: getCfg().applier.enableCompliance,
+      enableSelfEval: getCfg().applier.enableSelfEval,
+      selfEvalToolCallMin: getCfg().applier.selfEvalToolCallMin,
+      selfEvalFailRatio: getCfg().applier.selfEvalFailRatio,
+      keywordChars: 2,
+    }),
+  );
+
   // v5.0 M2:应用层—— agent/pre-step 注入相关教训(双区),让 agent 动手前就知道"别踩的坑"
-  const applier = new ApplierModule(ctx, getCfg, audit, memoryStore);
+  const applier = new ApplierModule(ctx, getCfg, audit, memoryStore, compliance);
+
+  // v5.0 O1:记忆编辑工具(memos_lookup/ack/correct),需 ctx.tools 可用
+  const memoryTools = new MemoryTools(ctx, audit, memoryStore, () => ({
+    correctPerDayLimit: getCfg().applier.correctPerDayLimit,
+  }));
 
   // v5.0 M3:演化引擎—— 衰减/合并/晋升/会话整合(记忆进化,能力进化 O5)
   const evolver = new EvolverModule(ctx, getCfg, audit, memoryStore, () => ({
@@ -185,6 +206,8 @@ export function apply(ctx: Context, initialConfig: Config): void {
     getApplier: () => applier,
     getEvolver: () => evolver,
     getReporter: () => reporter,
+    getCompliance: () => compliance,
+    getMemoryTools: () => memoryTools,
   });
 
   // 周期反思(默认关闭)

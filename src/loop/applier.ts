@@ -17,6 +17,7 @@ import type { Config } from '../config';
 import type { AuditLogger } from '../audit/logger';
 import { RetrievalPipeline } from '../core/retrieval';
 import type { MemoryStore } from '../core/memory-store';
+import type { ComplianceModule } from './compliance';
 
 export class ApplierModule {
   constructor(
@@ -24,13 +25,27 @@ export class ApplierModule {
     private config: () => Config,
     private audit: AuditLogger,
     private store: MemoryStore,
+    private compliance?: ComplianceModule,
   ) {
     const anyCtx = this.ctx as any;
     anyCtx.on('agent/pre-step', async (payload: any, next: any) => {
       // 与 memos-cloud 相同:先 await next() 拿 decision(后续注入/决策后的 messages)
       const decision = await next();
+      const sessionId = payload?.agent?.session?.id ?? '';
       try {
-        return this.maybeInject(decision);
+        const injected = this.maybeInject(decision);
+        // 登记注入给 compliance(仅当确实注入)
+        if (injected !== decision && this.compliance) {
+          const applied = (injected._appliedLessons as AppliedLessonInput[]) ?? [];
+          if (applied.length) {
+            this.compliance.recordApplied(
+              sessionId,
+              applied.map((a) => asAppliedRecord(a.memoryKey, a.patternKey, a.text)),
+            );
+          }
+          delete injected._appliedLessons;
+        }
+        return injected;
       } catch (error) {
         this.audit.debug('applier', `pre-step 注入失败: ${String(error)}`);
         return decision; // 失败不阻塞
@@ -59,11 +74,18 @@ export class ApplierModule {
     if (!build.hit) return decision;
 
     const injected = this.insertBeforeFirstUserMessage(decision.messages, build.block, intent);
+    const next = { ...decision, messages: injected };
+    // 附带注入教训清单(compliance 登记用,pre-step 外层消费后删除)
+    (next as any)._appliedLessons = build.lessons.map((l) => ({
+      memoryKey: l.memoryKey,
+      patternKey: l.patternKey,
+      text: l.text,
+    }));
     this.audit.debug(
       'applier',
       `注入 ${build.lessons.length} 条教训, intent=${intent.slice(0, 40)} keys=${build.lessons.map((l) => l.memoryKey.slice(0, 8)).join(',')}`,
     );
-    return { ...decision, messages: injected };
+    return next;
   }
 
   /**
@@ -100,3 +122,11 @@ export class ApplierModule {
     return '';
   }
 }
+
+// compliance 协作类型(注入清单)
+export interface AppliedLessonInput {
+  memoryKey: string;
+  patternKey?: string;
+  text: string;
+}
+export { asAppliedRecord } from './compliance';

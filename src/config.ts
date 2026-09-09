@@ -63,7 +63,11 @@ export const ConfigSchema = z.object({
     maxInjectionChars: z.number().default(600).description('单次注入总字符预算'),
     maxItemChars: z.number().default(200).description('单条注入字符预算'),
     enableAck: z.boolean().default(true).description('注入块附带 ack 提醒'),
-    enableCompliance: z.boolean().default(false).description('turn/end 遵守验证(预留 M2+)'),
+    enableCompliance: z.boolean().default(false).description('turn/end 遵守验证(O3)'),
+    enableSelfEval: z.boolean().default(false).description('completed 低质量自评触发深度反思(O3)'),
+    selfEvalToolCallMin: z.number().default(3).description('自评触发最小工具调用数'),
+    selfEvalFailRatio: z.number().default(0.5).description('自评失败率阈值(≥ 判低质量)'),
+    correctPerDayLimit: z.number().default(5).description('memos_correct 每日上限(O1)'),
   }),
 });
 
@@ -117,6 +121,10 @@ export interface Config {
     maxItemChars: number;
     enableAck: boolean;
     enableCompliance: boolean;
+    enableSelfEval: boolean;
+    selfEvalToolCallMin: number;
+    selfEvalFailRatio: number;
+    correctPerDayLimit: number;
   };
 }
 
@@ -170,6 +178,10 @@ export const DEFAULT_CONFIG: Config = {
     maxItemChars: 200,
     enableAck: true,
     enableCompliance: false,
+    enableSelfEval: false,
+    selfEvalToolCallMin: 3,
+    selfEvalFailRatio: 0.5,
+    correctPerDayLimit: 5,
   },
 };
 
