@@ -14,6 +14,7 @@ import { AuditLogger } from './audit/logger';
 import { MemoryStore } from './core/memory-store';
 import { ApplierModule } from './loop/applier';
 import { EvolverModule } from './loop/evolver';
+import { ReporterModule } from './loop/reporter';
 import { RetrievalPipeline } from './core/retrieval';
 import { MemOSWriter } from './backends/memos-backend';
 import { resolveMemOSApiKey } from './backends/api-key';
@@ -112,6 +113,9 @@ export function apply(ctx: Context, initialConfig: Config): void {
     maxViolationRateForPromotion: 0.2,
   }));
 
+  // v5.0 M4:闭环度量/报告—— 让进化可量化 + 元优化建议(O7)
+  const reporter = new ReporterModule(memoryStore.ledger);
+
   // 注入记忆使用规则到系统提示词变量(第二参数是 (context) => string 函数)
   const systemPrompt: any = (ctx as any).get('systemPrompt') ?? (ctx as any).systemPrompt;
   if (systemPrompt?.variable) {
@@ -180,6 +184,7 @@ export function apply(ctx: Context, initialConfig: Config): void {
     getStore: () => memoryStore,
     getApplier: () => applier,
     getEvolver: () => evolver,
+    getReporter: () => reporter,
   });
 
   // 周期反思(默认关闭)
@@ -227,6 +232,12 @@ export function apply(ctx: Context, initialConfig: Config): void {
   // v5.0 M3:暴露 Evolver 服务(手动 /evolve 与周期作业共用)
   (ctx as any).provide('evolverService', {
     run: (jobs: never) => evolver.run(jobs),
+  });
+
+  // v5.0 M4:暴露 Reporter 服务(记忆质量报告)
+  (ctx as any).provide('memoryReporter', {
+    report: () => reporter.report(),
+    format: (report: never) => reporter.format(report),
   });
 
   ctx.logger.info('dsh-reflection-memos loaded');

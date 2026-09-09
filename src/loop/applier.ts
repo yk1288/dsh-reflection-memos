@@ -12,6 +12,7 @@
  * - 事件注册 `{ prepend: true }`(与 memos-cloud 一致)。
  */
 import type { Context } from '@deepseek-ai/cordis';
+import { randomUUID } from 'node:crypto';
 import type { Config } from '../config';
 import type { AuditLogger } from '../audit/logger';
 import { RetrievalPipeline } from '../core/retrieval';
@@ -73,6 +74,7 @@ export class ApplierModule {
     const index = messages.findIndex((m) => m?.source?.kind === 'user');
     if (index < 0) return [...messages];
     const injectionMsg = {
+      id: randomUUID(), // 消息 id 必需: harness assertMessageEventShape 要求 user/message 带非空 id
       role: 'user',
       source: { kind: 'plugin', plugin: 'dsh-reflection-memos', form: 'lesson-injection', intent },
       content: [{ type: 'text', text: block }],

@@ -19,6 +19,7 @@ import { MemoryStore } from '../src/core/memory-store';
 import { RetrievalPipeline } from '../src/core/retrieval';
 import { ApplierModule } from '../src/loop/applier';
 import { EvolverModule } from '../src/loop/evolver';
+import { ReporterModule } from '../src/loop/reporter';
 import { RefinerModule } from '../src/modules/refiner';
 import { AuditLogger } from '../src/audit/logger';
 import type { EvolutionEntry } from '../src/types/evolution';
@@ -425,6 +426,51 @@ console.log('\n[6] M3 演化引擎:evolver');
   const r4 = await evolver2.run({ synthesize: true });
   const epi = store.ledger.query({ kind: 'episodic' });
   assert('M3: synthesize 生成 episodic 条目(kind=episodic)', r4.synthesized === 1 && epi.length === 1 && epi[0].kind === 'episodic', JSON.stringify(r4));
+}
+
+// ---------- 7. M4 闭环度量/报告 ----------
+console.log('\n[7] M4 闭环度量/报告:reporter');
+{
+  const dir = `/tmp/sia-m4-test-${Date.now()}`;
+  const audit = new AuditLogger(`/tmp/sia-m4-audit-${Date.now()}`);
+  const store = new MemoryStore({ writerProvider: null, audit, ledgerDir: dir });
+
+  // 准备:2 fact + 5 lesson(含 good/violating/pending/decayed/merged)
+  for (let i = 0; i < 2; i++) {
+    const f = store.ledger.createEntry({ content: `fact ${i}`, kind: 'fact', importance: 0.7, triage: 'acknowledged' });
+    store.ledger.upsert(f);
+  }
+  const good = store.ledger.createEntry({ content: '好教训A正文', kind: 'lesson', patternKey: 'a.good', reinforcementCount: 4, violationCount: 1, importance: 0.9, triage: 'acknowledged' });
+  store.ledger.upsert(good);
+  const bad = store.ledger.createEntry({ content: '坏教训B正文', kind: 'lesson', patternKey: 'b.violating', reinforcementCount: 1, violationCount: 5, importance: 0.8, triage: 'acknowledged' });
+  store.ledger.upsert(bad);
+  const pendingL = store.ledger.createEntry({ content: 'pending教训C正文', kind: 'lesson', patternKey: 'c.pending', failureCount: 1, triage: 'pending' });
+  store.ledger.upsert(pendingL);
+  const stale = store.ledger.createEntry({ content: 'stale教训D正文', kind: 'lesson', patternKey: 'd.stale', importance: 0.3, triage: 'acknowledged' });
+  stale.status = 'decayed';
+  store.ledger.upsert(stale);
+  const dup = store.ledger.createEntry({ content: 'merged教训E正文', kind: 'lesson', patternKey: 'e.merged', importance: 0.3, triage: 'acknowledged' });
+  dup.status = 'merged';
+  store.ledger.upsert(dup);
+
+  const reporter = new ReporterModule(store.ledger);
+  const r = reporter.report();
+
+  assert('M4: 账本指标统计正确', r.health.total === 7 && r.health.facts === 2 && r.health.lessons === 5, JSON.stringify(r.health));
+  assert('M4: 状态统计(decayed/merged/pending)', r.health.decayed === 1 && r.health.merged === 1 && r.health.pending === 1);
+  assert('M4: active 占比计算', Math.abs(r.health.activeRatio - (7 - 2) / 7) < 0.001, `activeRatio=${r.health.activeRatio}`);
+
+  // 遵守率:总 reinforcement=5(4+1), violation=6(1+5) → compliance=5/11≈45%, recurrence≈55%
+  const comp = r.lessons.complianceRate;
+  const rec = r.lessons.recurrenceRate;
+  assert('M4: 遵守率计算(≈45%)', comp !== null && comp > 0.4 && comp < 0.5, `compliance=${comp}`);
+  assert('M4: 复发率计算(≈55%)', rec !== null && rec > 0.5 && rec < 0.6, `recurrence=${rec}`);
+  assert('M4: 高风险教训 topViolations 首位为 b.violating', r.lessons.topViolations[0]?.patternKey === 'b.violating');
+
+  // 建议:遵守率<60% 且 复发率>25% 且 topViolation → 至少 2 条建议
+  assert('M4: 元优化建议生成(遵守/复发/高风险)', r.recommendations.length >= 2, JSON.stringify(r.recommendations));
+  const text = reporter.format(r);
+  assert('M4: 命令可读格式含指标', text.includes('遵守率') && text.includes('复发率') && text.includes('建议'));
 }
 
 // ---------- 辅助 ----------

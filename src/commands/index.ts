@@ -12,6 +12,7 @@ import type { MemoryStore } from '../core/memory-store';
 import { RetrievalPipeline } from '../core/retrieval';
 import type { ApplierModule } from '../loop/applier';
 import type { EvolverModule } from '../loop/evolver';
+import type { ReporterModule } from '../loop/reporter';
 
 export interface ReflectionModules {
   getReflector: () => ReflectorModule;
@@ -22,6 +23,7 @@ export interface ReflectionModules {
   getStore: () => MemoryStore;
   getApplier?: () => ApplierModule;
   getEvolver?: () => EvolverModule;
+  getReporter?: () => ReporterModule;
 }
 
 export function registerCommands(
@@ -202,6 +204,20 @@ export function registerCommands(
           `- 会话整合:${report.synthesized} 项${promoted}` +
           (report.errors.length > 0 ? `\n- 错误:${report.errors.join('; ')}` : ''),
       };
+    },
+  });
+
+  // /memory-report:记忆质量报告 + 元优化建议(M4)
+  commands.register({
+    name: 'memory-report',
+    description: '生成记忆质量报告(账本/教训效果/演化 + 元优化建议)',
+    handler: async () => {
+      const reporter = modules.getReporter?.();
+      if (!reporter) {
+        return { kind: 'error' as const, text: 'reporter 服务不可用(尚未装配)。' };
+      }
+      const report = reporter.report();
+      return { kind: 'success' as const, text: reporter.format(report) };
     },
   });
 }
