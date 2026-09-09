@@ -98,10 +98,15 @@ export class ComplianceModule {
     const applied = this.appliedBySession.get(sessionId);
     // 会话已结束(turn/end)后再清空,避免陈旧记录跨轮复用
     this.appliedBySession.delete(sessionId);
-    if (!applied || applied.length === 0) return;
+    if (!applied || applied.length === 0) {
+      // 诊断:无注入记录(可能 pre-step 未登记或 session id 不一致)
+      this.audit.debug('compliance', `turn/end(session ${sessionId.slice(0, 8)}) 无注入记录,skip`);
+      return;
+    }
 
     const reasonKind = event?.data?.reason?.kind;
     const completed = reasonKind === 'completed';
+    this.audit.debug('compliance', `turn/end(session ${sessionId.slice(0, 8)}) reason=${reasonKind} applied=${applied.length} enable=${cfg.enableCompliance}`);
 
     if (cfg.enableCompliance) {
       // 收集本轮轨迹文本(失败/错误迹象)
