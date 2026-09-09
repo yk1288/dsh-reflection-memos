@@ -133,37 +133,51 @@ export function registerCommands(
   });
 
   // /lesson-confirm:确认待分流教训(M2)—— 将 triage=pending 的教训置为 acknowledged,使其可被检索注入
-  // 用法:/lesson-confirm [patternKey 前缀] —— 无参数时列出全部待确认教训
+  // 用法:
+  //   /lesson-confirm                     → 列出全部待确认
+  //   /lesson-confirm <前缀>              → 确认 patternKey 以该前缀开头的
+  //   /lesson-confirm --high              → 批量确认高价值(importance≥0.8)
+  //   /lesson-confirm --min-failures N    → 批量确认失败次数≥N 的
+  //   /lesson-confirm --all               → 确认全部(谨慎,一次性清空 pending)
   commands.register({
     name: 'lesson-confirm',
-    description: '确认反思产出的待分流教训,使其可被检索注入(M2)',
-    input: { hint: '可选:patternKey 前缀;留空列出全部' },
+    description: '确认反思产出的待分流教训,使其可被检索注入(M2;支持批量筛选)',
+    input: { hint: '[前缀 | --high | --min-failures N | --all]' },
     handler: async (invocation: any) => {
       const store = modules.getStore();
       const pending = store.query({ kind: 'lesson', triage: 'pending' });
-      const prefix = (invocation?.rawInput ?? '').trim();
+      const raw = (invocation?.rawInput ?? '').trim();
 
-      if (!prefix) {
+      // 无参数:列出全部待确认
+      if (!raw) {
         if (pending.length === 0) {
           return { kind: 'success' as const, text: '当前没有待确认的教训。' };
         }
         const lines = pending.map(
-          (e) => `- ${e.patternKey ?? '无key'} | 失败${e.failureCount}次 | ${(e.contentHash ?? '').slice(0, 40)}`,
+          (e) => `- ${e.patternKey ?? '无key'} | 失败${e.failureCount}次 imp=${e.importance} | ${(e.contentHash ?? '').slice(0, 32)}`,
         );
         return {
           kind: 'success' as const,
-          text: `待确认教训 ${pending.length} 条:\n${lines.join('\n')}\n\n用法:/lesson-confirm <patternKey 前缀> 确认其中匹配的。`,
+          text: `待确认教训 ${pending.length} 条:\n${lines.join('\n')}\n\n用法:/lesson-confirm <前缀> | --high | --min-failures N | --all`,
         };
       }
 
-      const matched = pending.filter(
-        (e) => e.patternKey && e.patternKey.startsWith(prefix),
-      );
+      // 批量筛选
+      let matched = pending;
+      if (raw === '--all') {
+        matched = pending;
+      } else if (raw === '--high') {
+        matched = pending.filter((e) => e.importance >= 0.8);
+      } else if (raw.startsWith('--min-failures')) {
+        const n = Number(raw.split(/\s+/)[1] ?? '3');
+        matched = pending.filter((e) => e.failureCount >= (Number.isFinite(n) ? n : 3));
+      } else {
+        // 前缀匹配(保留原语义)
+        matched = pending.filter((e) => e.patternKey && e.patternKey.startsWith(raw));
+      }
+
       if (matched.length === 0) {
-        return {
-          kind: 'error' as const,
-          text: `没有匹配 "${prefix}" 的待确认教训。`,
-        };
+        return { kind: 'error' as const, text: `没有匹配 "${raw}" 的待确认教训。` };
       }
       let confirmed = 0;
       for (const e of matched) {
@@ -171,7 +185,7 @@ export function registerCommands(
       }
       return {
         kind: 'success' as const,
-        text: `已确认 ${confirmed} 条教训(可被检索注入)。`,
+        text: `已确认 ${confirmed} 条教训(匹配 "${raw}";可被检索注入)。`,
       };
     },
   });
@@ -192,6 +206,7 @@ export function registerCommands(
         promote: /\b--promote\b/.test(args),
         consolidate: /\b--consolidate\b/.test(args),
         synthesize: /\b--synthesize\b/.test(args),
+        autoAcknowledge: /\b--auto-ack\b/.test(args),
       };
       const report = await evolver.run(jobs);
       const promoted = report.promoted.length > 0
@@ -205,7 +220,8 @@ export function registerCommands(
           `- 复活:${report.revived} 项\n` +
           `- 归档:${report.archived} 项\n` +
           `- 合并:${report.consolidated} 项\n` +
-          `- 会话整合:${report.synthesized} 项${promoted}` +
+          `- 会话整合:${report.synthesized} 项\n` +
+          `- 自动确认教训:${report.autoAcknowledged} 项${promoted}` +
           (report.errors.length > 0 ? `\n- 错误:${report.errors.join('; ')}` : ''),
       };
     },

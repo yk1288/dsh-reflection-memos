@@ -620,6 +620,49 @@ console.log('\n[9] O5/O2:harvest + synthesizeTrajectory');
   assert('O2: synthesizeTrajectory 生成 episodic(scenario/pitfall/outcome)', !!ep && ep.kind === 'episodic' && ep.contentHash.includes('FTP 部署') && ep.contentHash.includes('先备份再覆盖'), JSON.stringify(ep?.contentHash ?? null));
 }
 
+// ---------- 10. #1#2:pending 自动确认 + 批量筛选 ----------
+console.log('\n[10] #1#2:autoAcknowledge + 批量确认');
+{
+  const dir = `/tmp/sia-ack-test-${Date.now()}`;
+  const audit = new AuditLogger(`/tmp/sia-ack-audit-${Date.now()}`);
+  const store = new MemoryStore({ writerProvider: null, audit, ledgerDir: dir });
+
+  // 造 4 条 pending:高价值高失败 → 应被 auto-ack;低价值 → 不应
+  const high = store.ledger.createEntry({ content: '高价值教训A 内容正文', kind: 'lesson', patternKey: 'high.a', importance: 0.95, failureCount: 4, triage: 'pending' });
+  store.ledger.upsert(high);
+  const mid = store.ledger.createEntry({ content: '中价值教训B 内容正文', kind: 'lesson', patternKey: 'mid.b', importance: 0.7, failureCount: 4, triage: 'pending' });
+  store.ledger.upsert(mid);
+  const low = store.ledger.createEntry({ content: '低价值教训C 内容正文', kind: 'lesson', patternKey: 'low.c', importance: 0.95, failureCount: 1, triage: 'pending' });
+  store.ledger.upsert(low);
+  const plain = store.ledger.createEntry({ content: '普通教训D 内容正文', kind: 'lesson', patternKey: 'plain.d', importance: 0.6, failureCount: 1, triage: 'pending' });
+  store.ledger.upsert(plain);
+
+  // a. autoAcknowledge 门槛(imp≥0.8 且 fail≥3 → 只确认 high.a)
+  const evolver = new EvolverModule({} as never, () => ({}) as never, audit, store, () => ({
+    decayAfterDays: 30, archiveAfterDays: 60, importanceBoostFactor: 3,
+    minReinforcementForPromotion: 3, maxViolationRateForPromotion: 0.2,
+    autoAckMinImportance: 0.8, autoAckMinFailures: 3,
+  }));
+  const r = await evolver.run({ autoAcknowledge: true });
+  assert('#1: autoAcknowledge 确认高价值高失败教训', r.autoAcknowledged === 1 && store.ledger.get(high.memoryKey)?.triage === 'acknowledged', JSON.stringify(r));
+  assert('#1: 不误确认低重要性(imp<0.8)', store.ledger.get(mid.memoryKey)?.triage === 'pending', `mid=${store.ledger.get(mid.memoryKey)?.triage}`);
+  assert('#1: 不误确认低失败次数(fail<3)', store.ledger.get(low.memoryKey)?.triage === 'pending', `low=${store.ledger.get(low.memoryKey)?.triage}`);
+
+  // b. 批量确认 --min-failures:确认失败≥4 的(high 已确认过,剩 mid fail=4 → +1)
+  const r2 = await evolver.run({ autoAcknowledge: true }); // 幂等:已确认的不重复
+  assert('#1: autoAcknowledge 幂等(重复跑不重复确认)', r2.autoAcknowledged === 0, JSON.stringify(r2));
+
+  // c. 批量确认 --high 语义(通过 ledger.acknowledge 手动模拟命令路径)
+  let confirmed = 0;
+  const pending = store.query({ kind: 'lesson', triage: 'pending' }).filter((e) => e.importance >= 0.8);
+  for (const e of pending) if (store.ledger.acknowledge(e.memoryKey)) confirmed += 1;
+  assert('#2: 批量 --high 确认所有 importance≥0.8 的 pending', confirmed === pending.length, `confirmed=${confirmed} pending=${pending.length}`);
+
+  // d. 前缀匹配语义(--prefix 保留)
+  const byPrefix = store.query({ kind: 'lesson', triage: 'pending' }).filter((e) => e.patternKey?.startsWith('mid'));
+  assert('#2: 前缀筛选 mid.* 命中', byPrefix.length === 1 && byPrefix[0].patternKey === 'mid.b');
+}
+
 // ---------- 辅助 ----------
 const minimum = {
   evidenceMinChars: 20,

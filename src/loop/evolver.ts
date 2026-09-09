@@ -29,6 +29,7 @@ export interface EvolveJobReport {
   consolidated: number;
   promoted: string[];
   synthesized: number;
+  autoAcknowledged: number;
   errors: string[];
 }
 
@@ -38,8 +39,11 @@ export interface EvolverOptions {
   importanceBoostFactor: number; // importance ≥0.8 的衰减期 ×factor
   minReinforcementForPromotion: number;
   maxViolationRateForPromotion: number;
+  /** auto-acknowledge 门槛:pending 教训 importance≥此值 且 failureCount≥此值 才自动确认 */
+  autoAckMinImportance?: number;
+  autoAckMinFailures?: number;
   skillsDir?: string;
-  enabledJobs?: { decay?: boolean; consolidate?: boolean; promote?: boolean; synthesize?: boolean };
+  enabledJobs?: { decay?: boolean; consolidate?: boolean; promote?: boolean; synthesize?: boolean; autoAcknowledge?: boolean };
 }
 
 export class EvolverModule {
@@ -52,10 +56,10 @@ export class EvolverModule {
   ) {}
 
   /** 手动/周期触发:跑 enableJobs 对应的作业 */
-  async run(jobs?: Partial<{ decay: boolean; consolidate: boolean; promote: boolean; synthesize: boolean }>): Promise<EvolveJobReport> {
+  async run(jobs?: Partial<{ decay: boolean; consolidate: boolean; promote: boolean; synthesize: boolean; autoAcknowledge: boolean }>): Promise<EvolveJobReport> {
     const opts = this.options();
-    const enabled = { decay: true, consolidate: false, promote: false, synthesize: false, ...(opts.enabledJobs ?? {}), ...(jobs ?? {}) };
-    const report: EvolveJobReport = { decayed: 0, revived: 0, archived: 0, consolidated: 0, promoted: [], synthesized: 0, errors: [] };
+    const enabled = { decay: true, consolidate: false, promote: false, synthesize: false, autoAcknowledge: false, ...(opts.enabledJobs ?? {}), ...(jobs ?? {}) };
+    const report: EvolveJobReport = { decayed: 0, revived: 0, archived: 0, consolidated: 0, promoted: [], synthesized: 0, autoAcknowledged: 0, errors: [] };
 
     if (enabled.decay) {
       try {
@@ -80,9 +84,37 @@ export class EvolverModule {
         report.synthesized += await this.runSynthesize();
       } catch (e) { report.errors.push(`synthesize: ${String(e)}`); }
     }
+    if (enabled.autoAcknowledge) {
+      try {
+        report.autoAcknowledged += this.runAutoAcknowledge(opts);
+      } catch (e) { report.errors.push(`autoAcknowledge: ${String(e)}`); }
+    }
 
     this.audit.debug('evolve', JSON.stringify({ jobs: enabled, report }));
     return report;
+  }
+
+  // ---------- autoAcknowledge(pending 治理 #1) ----------
+  /**
+   * 自动确认高价值 pending 教训:importance≥autoAckMinImportance(默认 0.8)
+   * 且 failureCount≥autoAckMinFailures(默认 3) → triage pending→acknowledged。
+   * 缓解 GAP-3 积压:高失败频率的教训本身已"反复验证",人工确认收益低,自动放开。
+   */
+  private runAutoAcknowledge(opts: EvolverOptions): number {
+    const minImp = opts.autoAckMinImportance ?? 0.8;
+    const minFail = opts.autoAckMinFailures ?? 3;
+    let acked = 0;
+    const pending = this.store.ledger.query({ kind: 'lesson', triage: 'pending' });
+    for (const e of pending) {
+      if (e.importance >= minImp && e.failureCount >= minFail) {
+        if (this.store.ledger.acknowledge(e.memoryKey)) {
+          acked += 1;
+          this.audit.debug('evolve', `auto-ack ${e.patternKey ?? e.memoryKey.slice(0, 8)} (imp=${e.importance} fail=${e.failureCount})`);
+        }
+      }
+    }
+    if (acked > 0) this.audit.debug('evolve', `autoAcknowledge 完成 ${acked} 条`);
+    return acked;
   }
 
   // ---------- decay ----------
