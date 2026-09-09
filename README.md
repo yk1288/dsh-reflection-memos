@@ -43,6 +43,10 @@ DSH Session ──▶ Observer ──▶ Reflector(三审) ──▶ refiner    
 | M1 单一写入闸门 | WriteGate 四审(脱敏/证据/置信度/patternKey 查重)+ 配额 + search 验证 + 审计,一次性实现 |
 | M2 教训注入预审(O6) | 统一检索管线 `RetrievalPipeline`:账本覆盖 → 双区(核心区常驻/情境区按意图)→ ack 提示;`agent/pre-step` 注入(实测会话 lesson-injection 事件) |
 | M3 演化引擎(O2/O4/O5) | `loop/evolver.ts`:衰减/回活/归档、同 key 合并、晋升 Skill(~/.dsh/skills/)、会话整合 episodic |
+| O1 记忆编辑工具 | `tools/memory-tools.ts`:`memos_lookup`(只读)、`memos_lesson_ack`(声明遵守)、`memos_correct`(受限写,每日上限+reason 护栏) |
+| O3 遵守验证/自评 | `loop/compliance.ts`:turn/end 对照轨迹判定 violated/complied → 账本计数;低质量完成自评触发深度反思 |
+| O5 黄金路径止损 | `evolver.harvestGoldenPath`:任务成功+≥3 工具调用+试错信号 → 即时生成 Skill |
+| O2 轨迹级会话整合 | `evolver.synthesizeTrajectory`:场景/步骤/坑/结果 → episodic 本地条目 |
 | 写入脱敏(GAP-1) | 提交 MemOS 前对 api_key/token/secret/Bearer/JWT/长blob 替换 `[REDACTED]` |
 | patternKey 去重(GAP-2) | `area.symptom` 稳定键查重,语义相同措辞不同的错误不再重复入库,复发折叠计数 |
 | pending 分流(GAP-3) | 自动链路产物默认 `triage=pending`,确认后才被召回注入 |
@@ -174,7 +178,7 @@ MEMOS_USER_ID=yk
 | `/memos-stat` | 查看记忆统计:提交数 / 入库数 / 失败数 / 事实数 / 教训数 |
 | `/evolve [--promote]` | 手动演化作业:衰减/合并(true)/晋升(--promote)/会话整合(--synthesize) |
 | `/lesson-confirm [前缀]` | 确认待分流教训为 acknowledged(可被注入) |
-| `/lesson-check`(设计) | 教训注入/遵守/违反一览 |
+| `/lesson-check` | 教训注入/遵守/违反一览(O3 可观测性) |
 | 遵守验证/自评(O3,O6) | 教训注入后验证是否遵守、任务自评触发深度反思(enableCompliance 预留) |
 
 ---
