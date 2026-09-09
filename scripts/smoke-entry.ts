@@ -341,18 +341,19 @@ console.log('\n[5] M2 检索注入(双区):retrieval → applier');
     audit,
     store,
   );
-  // 手动调用内部逻辑(经公共 API:直接验证 payload 注入)
-  const payload: any = {
+  // M2 修复后:maybeInject 返回新 decision(不可变插入),需要 message.source.kind==='user'
+  const decision: any = {
     messages: [
-      { role: 'system', content: [{ type: 'text', text: 'sys' }] },
-      { role: 'user', content: [{ type: 'text', text: '帮我部署文件到 FTP 并覆盖' }] },
+      { role: 'system', source: { kind: 'system' }, content: [{ type: 'text', text: 'sys' }] },
+      { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '帮我部署文件到 FTP 并覆盖' }] },
     ],
   };
-  (applier as any).maybeInject(payload);
-  const lastContent = payload.messages[1].content;
-  const injected = lastContent.find((b: any) => b.type === 'text' && b.text.includes('经验提醒'));
-  assert('M2: applier 在 pre-step 注入提醒块(user 消息后)', Boolean(injected), JSON.stringify(lastContent));
-  assert('M2: 注入块存在且含教训文本', injected?.text.includes('FTP 覆盖线上文件必须先备份'));
+  const nextDecision = (applier as any).maybeInject(decision);
+  const injectedMsg = nextDecision.messages.find((m: any) => m?.source?.kind === 'plugin' && m?.source?.plugin === 'dsh-reflection-memos');
+  assert('M2: applier 返回新 decision(不可变,含注入消息)', Boolean(injectedMsg), JSON.stringify(nextDecision.messages.map((m: any) => m.source?.kind)));
+  const injectedText = injectedMsg?.content?.find((b: any) => b.type === 'text')?.text ?? '';
+  assert('M2: 注入块存在且含教训文本', injectedText.includes('FTP 覆盖线上文件必须先备份'));
+  assert('M2: 原 messages 未被修改(冻结安全)', decision.messages.length === 2 && decision.messages[1].content.length === 1);
 }
 
 // ---------- 辅助 ----------

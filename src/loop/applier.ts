@@ -5,11 +5,11 @@
  * 让 agent 在动手前就知道"别踩的坑"。M2 范围:注入 + ack 提示 + 审计/统计;
  * compliance 遵守验证(enableCompliance)预留到 M2+。
  *
- * 设计要点:
- * - 不碰 systemPrompt(DSH 结论:pre-step 只能改 messages);
- * - 注入形态:user 消息后追加一条"经验提醒"块(紧凑、预算内);
- * - 只注入账本里 active 且 triage!=='pending' 的教训(GAP-3);
- * - 命中即记审计 lesson-injected;后续可被 /lesson-check 统计。
+ * 真实环境修正(2026-09-09):
+ * - pre-step 的 messages 是冻结对象,不能改 msg.content → 参照 memos-cloud 模式,
+ *   `await next()` 取 decision,构造新消息数组,在首条用户消息前插入注入块
+ *   (insertRecallBeforeDirectUser 同款不可变插入),返回 { ...decision, messages }。
+ * - 事件注册 `{ prepend: true }`(与 memos-cloud 一致)。
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Config } from '../config';
@@ -25,25 +25,26 @@ export class ApplierModule {
     private store: MemoryStore,
   ) {
     const anyCtx = this.ctx as any;
-    // pre-step:注入教训块(在现有 pre-step 之后执行,不阻塞)
-    anyCtx.on('agent/pre-step', (payload: any, next: any) => {
+    anyCtx.on('agent/pre-step', async (payload: any, next: any) => {
+      // 与 memos-cloud 相同:先 await next() 拿 decision(后续注入/决策后的 messages)
+      const decision = await next();
       try {
-        this.maybeInject(payload);
+        return this.maybeInject(decision);
       } catch (error) {
         this.audit.debug('applier', `pre-step 注入失败: ${String(error)}`);
+        return decision; // 失败不阻塞
       }
-      return next();
-    }, { prepend: false });
+    }, { prepend: true });
   }
 
-  /** 从 pre-step payload 推断任务意图(最新 user 文本)并注入 */
-  private maybeInject(payload: any): void {
+  /** 从 decision.messages 推断任务意图并注入(不可变构造) */
+  private maybeInject(decision: any): any {
     const cfg = this.config();
-    if (!cfg.applier.enableLessonInjection) return;
-    if (!payload?.messages || !Array.isArray(payload.messages)) return;
+    if (!cfg.applier.enableLessonInjection) return decision;
+    if (!decision?.messages || !Array.isArray(decision.messages)) return decision;
 
-    const intent = this.extractIntent(payload.messages);
-    if (!intent) return;
+    const intent = this.extractIntent(decision.messages);
+    if (!intent) return decision;
 
     const pipeline = new RetrievalPipeline(this.store.ledger, () => ({
       coreZoneMax: cfg.applier.coreZoneMax,
@@ -54,25 +55,29 @@ export class ApplierModule {
     }));
 
     const build = pipeline.retrieve({ intent });
-    if (!build.hit) return;
+    if (!build.hit) return decision;
 
-    // 注入:在最后一条 user 消息后追加一块(与 memos-cloud 召回同形态,便于模型识别)
-    const lastUserIndex = this.lastUserMessageIndex(payload.messages);
-    const block = { type: 'text' as const, text: build.block };
-    if (lastUserIndex >= 0) {
-      const msg = payload.messages[lastUserIndex];
-      const content = Array.isArray(msg.content) ? [...msg.content] : [];
-      content.push(block);
-      msg.content = content;
-    } else {
-      // 无 user 消息时追加到消息尾
-      payload.messages.push({
-        role: 'user',
-        content: [{ type: 'text', text: build.block }],
-      });
-    }
+    const injected = this.insertBeforeFirstUserMessage(decision.messages, build.block, intent);
+    this.audit.debug(
+      'applier',
+      `注入 ${build.lessons.length} 条教训, intent=${intent.slice(0, 40)} keys=${build.lessons.map((l) => l.memoryKey.slice(0, 8)).join(',')}`,
+    );
+    return { ...decision, messages: injected };
+  }
 
-    this.audit.debug('applier', `注入 ${build.lessons.length} 条教训, intent=${intent.slice(0, 40)} keys=${build.lessons.map((l) => l.memoryKey.slice(0, 8)).join(',')}`);
+  /**
+   * 不可变插入:在第一条 source.kind==='user' 的消息前插入注入块(参照 memos-cloud
+   * insertRecallBeforeDirectUser)。不去改冻结消息对象的 content。
+   */
+  private insertBeforeFirstUserMessage(messages: any[], block: string, intent: string): any[] {
+    const index = messages.findIndex((m) => m?.source?.kind === 'user');
+    if (index < 0) return [...messages];
+    const injectionMsg = {
+      role: 'user',
+      source: { kind: 'plugin', plugin: 'dsh-reflection-memos', form: 'lesson-injection', intent },
+      content: [{ type: 'text', text: block }],
+    };
+    return [...messages.slice(0, index), injectionMsg, ...messages.slice(index)];
   }
 
   /** 提取最近 user 文本(忽略 tool/assistant;含运行时快照时优先其后真实用户文本) */
@@ -91,12 +96,5 @@ export class ApplierModule {
       }
     }
     return '';
-  }
-
-  private lastUserMessageIndex(messages: any[]): number {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i]?.role === 'user') return i;
-    }
-    return -1;
   }
 }
