@@ -52,6 +52,7 @@ DSH Session ──▶ Observer ──▶ Reflector(三审) ──▶ refiner    
 | #3 误报收紧 | compliance 判别"纠错成功信号"(exit 0/成功/修复)不判违规,降低带病误报 |
 | #5 周期演化 | 每日自动 `decay + autoAcknowledge`(无人工干预的持续记忆治理) |
 | #7 correct 闭环 | `lesson/correct-request` → 账本 v+1 修正,旧版 superseded(agent 受限写) |
+| O1 工具可用 | 已对齐 dsh-tools output 契约(schema/render/execute);实战 memos_lookup 真实调用成功 |
 | 写入脱敏(GAP-1) | 提交 MemOS 前对 api_key/token/secret/Bearer/JWT/长blob 替换 `[REDACTED]` |
 | patternKey 去重(GAP-2) | `area.symptom` 稳定键查重,语义相同措辞不同的错误不再重复入库,复发折叠计数 |
 | pending 分流(GAP-3) | 自动链路产物默认 `triage=pending`,确认后才被召回注入 |
