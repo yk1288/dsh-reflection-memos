@@ -47,6 +47,11 @@ DSH Session ──▶ Observer ──▶ Reflector(三审) ──▶ refiner    
 | O3 遵守验证/自评 | `loop/compliance.ts`:turn/end 对照轨迹判定 violated/complied → 账本计数;低质量完成自评触发深度反思 |
 | O5 黄金路径止损 | `evolver.harvestGoldenPath`:任务成功+≥3 工具调用+试错信号 → 即时生成 Skill |
 | O2 轨迹级会话整合 | `evolver.synthesizeTrajectory`:场景/步骤/坑/结果 → episodic 本地条目 |
+| #1 pending 自动确认 | `evolver.autoAcknowledge`:importance≥0.8 且 failureCount≥3 的教训自动转 acknowledged(缓解 GAP-3 积压) |
+| #2 批量确认 | `/lesson-confirm --high / --min-failures N`:批量筛选确认,清 pending 积压 |
+| #3 误报收紧 | compliance 判别"纠错成功信号"(exit 0/成功/修复)不判违规,降低带病误报 |
+| #5 周期演化 | 每日自动 `decay + autoAcknowledge`(无人工干预的持续记忆治理) |
+| #7 correct 闭环 | `lesson/correct-request` → 账本 v+1 修正,旧版 superseded(agent 受限写) |
 | 写入脱敏(GAP-1) | 提交 MemOS 前对 api_key/token/secret/Bearer/JWT/长blob 替换 `[REDACTED]` |
 | patternKey 去重(GAP-2) | `area.symptom` 稳定键查重,语义相同措辞不同的错误不再重复入库,复发折叠计数 |
 | pending 分流(GAP-3) | 自动链路产物默认 `triage=pending`,确认后才被召回注入 |
@@ -176,10 +181,10 @@ MEMOS_USER_ID=yk
 | `/reflect` | 手动触发反思:分析当前会话轨迹 → Reviewer 子代理审查 → 四审 → 经 WriteGate 写入 MemOS |
 | `/plan-and-execute <任务>` | 生成多步计划并开始执行(runMaintenance 自动推进,完成后自动反思) |
 | `/memos-stat` | 查看记忆统计:提交数 / 入库数 / 失败数 / 事实数 / 教训数 |
-| `/evolve [--promote]` | 手动演化作业:衰减/合并(true)/晋升(--promote)/会话整合(--synthesize) |
-| `/lesson-confirm [前缀]` | 确认待分流教训为 acknowledged(可被注入) |
+| `/evolve [--promote|--auto-ack|--synthesize]` | 手动演化作业:衰减/合并/晋升(--promote)/会话整合(--synthesize)/自动确认教训(--auto-ack) |
+| `/lesson-confirm [前缀|--high|--min-failures N|--all]` | 确认待分流教训为 acknowledged(支持批量筛选) |
 | `/lesson-check` | 教训注入/遵守/违反一览(O3 可观测性) |
-| 遵守验证/自评(O3,O6) | 教训注入后验证是否遵守、任务自评触发深度反思(enableCompliance 预留) |
+| `/memory-report` | 记忆质量报告 + 元优化建议(O7) |
 
 ---
 
@@ -251,6 +256,18 @@ src/
 ---
 
 ## 开发日志
+
+### 2026-09-09(优化 #1-#7)
+
+- #1/#2 pending 治理:autoAcknowledge 自动确认 + /lesson-confirm 批量筛选(--high/--min-failures/--all)
+- #3 compliance 误报收紧:纠错成功信号(exit 0/成功/修复)不判违规
+- #4 extractKeywords 中文去噪:扩展弱词表,保留语义词
+- #5 周期演化:每日自动 decay+autoAcknowledge
+- #6 Reviewer persona 强化:仅一个 JSON、首字符 {、禁 Markdown/前言
+- #7 memos_correct 闭环:correct-request → 账本 v+1 修正,旧版 superseded
+- 复发率显形实证:带病完成(教训词+404+无成功信号)→ violation 0→1、复发率 0%→1.9%;演示后回滚保持生产干净
+- 方法论沉淀:2 条教训经 WriteGate 写入 MemOS(search top relativity 0.65/0.76)+ 本地账本同步
+- smoke 扩展至 83 项全绿;提交 fa0f8ce + 后续沉淀
 
 ### 2026-09-09(真实环境验证 + 修复)
 
