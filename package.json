@@ -1,6 +1,6 @@
 {
   "name": "dsh-reflection-memos",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Reflection-loop plugin for MemOS: verified writes via /add/message + /search/memory verification",
   "type": "module",
   "main": "lib/index.js",
