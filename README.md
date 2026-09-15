@@ -265,6 +265,7 @@ src/
 - 修复:`memory-tools.ts` 三个工具 `parameters` 改为 object-rooted JSON Schema(`{type:'object',properties,required}`,新增 `parameterSchema()` 编译助手);代码注释同步更正契约说明
 - 验证:smoke 新增 12 条 wire-schema 回归断言(顶层 type/properties/required 引用),92 项全绿;真实上游直连实测(deepseek-v4-flash/mimo-v2.5/qwen3.8-flash/minimax-m3/mimo-v2.5-pro/qwen3.8-max/glm-5.2 全部 200,无 schema 拒绝)
 - 提交:b5c8a02 之后的二次修复(详见 src/tools/memory-tools.ts 头部注释)
+- 补充:`inject` 补 `timer`(周期反思/周期演化 #5 的 `setInterval` 依赖显式声明,此前仅在运行时防御式可用);新增 `scripts/repro-opencode-schema.ts` 上游端到端回归(自包含:本地断言 + 3 个真实上游目标,退出码语义化)
 
 ### 2026-09-09(优化 #1-#7)
 
