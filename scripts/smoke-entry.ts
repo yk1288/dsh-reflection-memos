@@ -565,6 +565,15 @@ console.log('\n[8] O1/O3:memory-tools + compliance');
     store,
     () => ({ correctPerDayLimit: 2 }),
   );
+  // [O1] wire schema 回归(2026-09-15,用户诊断):raw register 的 parameters 原样
+  // 透传上游(Console Go),必须是 object-rooted JSON Schema,否则上游报 "type: null" 拒绝
+  for (const t of [(tools as any).lookupTool(), (tools as any).ackTool(), (tools as any).correctTool()]) {
+    const p = t.parameters;
+    assert(`O1: ${t.name} parameters 顶层 type='object'`, p?.type === 'object', JSON.stringify(p));
+    assert(`O1: ${t.name} parameters.properties 为对象`, typeof p?.properties === 'object' && p.properties !== null, JSON.stringify(p));
+    const requiredOk = !Array.isArray(p?.required) || p.required.every((k: string) => typeof k === 'string' && Object.hasOwn(p.properties, k));
+    assert(`O1: ${t.name} parameters.required 引用已声明属性`, requiredOk, JSON.stringify(p?.required));
+  }
   const correct = (tools as any).correctTool();
   const r1 = await correct.execute({ memoryKey: lesson.memoryKey, reason: '短' });
   assert('O1: memos_correct 拒绝短 reason', r1.ok === false && String(r1.error).includes('10 字符'), JSON.stringify(r1));

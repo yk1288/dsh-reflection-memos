@@ -43,7 +43,7 @@ DSH Session ──▶ Observer ──▶ Reflector(三审) ──▶ refiner    
 | M1 单一写入闸门 | WriteGate 四审(脱敏/证据/置信度/patternKey 查重)+ 配额 + search 验证 + 审计,一次性实现 |
 | M2 教训注入预审(O6) | 统一检索管线 `RetrievalPipeline`:账本覆盖 → 双区(核心区常驻/情境区按意图)→ ack 提示;`agent/pre-step` 注入(实测会话 lesson-injection 事件) |
 | M3 演化引擎(O2/O4/O5) | `loop/evolver.ts`:衰减/回活/归档、同 key 合并、晋升 Skill(~/.dsh/skills/)、会话整合 episodic |
-| O1 记忆编辑工具 | `tools/memory-tools.ts`:`memos_lookup`(只读)、`memos_lesson_ack`(声明遵守)、`memos_correct`(受限写,每日上限+reason 护栏) |
+| O1 记忆编辑工具 | `tools/memory-tools.ts`:`memos_lookup`(只读)、`memos_lesson_ack`(声明遵守)、`memos_correct`(受限写,每日上限+reason 护栏);raw register 的 `parameters` 为 object-rooted JSON Schema(`type:"object"`+properties+required,上游 Console Go 校验) |
 | O3 遵守验证/自评 | `loop/compliance.ts`:turn/end 对照轨迹判定 violated/complied → 账本计数;低质量完成自评触发深度反思 |
 | O5 黄金路径止损 | `evolver.harvestGoldenPath`:任务成功+≥3 工具调用+试错信号 → 即时生成 Skill |
 | O2 轨迹级会话整合 | `evolver.synthesizeTrajectory`:场景/步骤/坑/结果 → episodic 本地条目 |
@@ -52,7 +52,7 @@ DSH Session ──▶ Observer ──▶ Reflector(三审) ──▶ refiner    
 | #3 误报收紧 | compliance 判别"纠错成功信号"(exit 0/成功/修复)不判违规,降低带病误报 |
 | #5 周期演化 | 每日自动 `decay + autoAcknowledge`(无人工干预的持续记忆治理) |
 | #7 correct 闭环 | `lesson/correct-request` → 账本 v+1 修正,旧版 superseded(agent 受限写) |
-| O1 工具可用 | 已对齐 dsh-tools output 契约(schema/render/execute);实战 memos_lookup 真实调用成功 |
+| O1 工具可用 | 已对齐 dsh-tools output 契约(schema/render/execute)+ parameters object-rooted JSON Schema(2026-09-15 修);实战 memos_lookup 真实调用成功 |
 | 写入脱敏(GAP-1) | 提交 MemOS 前对 api_key/token/secret/Bearer/JWT/长blob 替换 `[REDACTED]` |
 | patternKey 去重(GAP-2) | `area.symptom` 稳定键查重,语义相同措辞不同的错误不再重复入库,复发折叠计数 |
 | pending 分流(GAP-3) | 自动链路产物默认 `triage=pending`,确认后才被召回注入 |
@@ -257,6 +257,14 @@ src/
 ---
 
 ## 开发日志
+
+### 2026-09-15(memos_* 工具 wire schema 修复)
+
+- 用户诊断:`memos_correct` 请求被上游拒绝 — `invalid_request_error: 函数 'memos_correct' 的模式无效:模式必须是 'type: "object"' 的 JSON Schema,但收到了 'type: null'`
+- 根因:09-09 的简化 spec(`{字段:{type,required,description}}`)只对 `defineTool` 有效;raw `ctx.tools.register()` 的 `schemaOf()` 把 `parameters` **原样透传**上游,不编译为 JSON Schema,缺顶层 `type` → 上游收到 `type: null`
+- 修复:`memory-tools.ts` 三个工具 `parameters` 改为 object-rooted JSON Schema(`{type:'object',properties,required}`,新增 `parameterSchema()` 编译助手);代码注释同步更正契约说明
+- 验证:smoke 新增 12 条 wire-schema 回归断言(顶层 type/properties/required 引用),92 项全绿;真实上游直连实测(deepseek-v4-flash/mimo-v2.5/qwen3.8-flash/minimax-m3/mimo-v2.5-pro/qwen3.8-max/glm-5.2 全部 200,无 schema 拒绝)
+- 提交:b5c8a02 之后的二次修复(详见 src/tools/memory-tools.ts 头部注释)
 
 ### 2026-09-09(优化 #1-#7)
 

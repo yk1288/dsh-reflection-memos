@@ -8,9 +8,17 @@
  *   (真正的 v+1 修正走既有反思闭环);每日限量,护栏防顺手乱写
  *
  * 实测修复(2026-09-09,用户诊断):工具注册失败根因——dsh-tools 强制
- *   `output: { schema, render, presentationMeta? }`,且 parameters 须为"简化 spec"
- *   ({ 字段: { type, required, description } }),不是 JSON-Schema 包装。
- * 现按 dsh-tools defineTool 合约重写。
+ *   `output: { schema, render, presentationMeta? }`,且 defineTool 的
+ *   parameters 接受"简化 spec"({ 字段: { type, required, description } })。
+ *
+ * 二次修复(2026-09-15,用户诊断):raw `ctx.tools.register()` 与 defineTool
+ *   不同——registry 的 `schemaOf()` 会把注册对象里的 `parameters` **原样透传**
+ *   到模型上游,不做简化 spec → JSON Schema 编译。上游(Console Go 等)要求
+ *   parameters 必须是 object-rooted JSON Schema(`type: "object"` + properties
+ *   + required);简化 spec 缺顶层 type,上游收到 `type: null` 直接拒绝
+ *   ("函数 'memos_correct' 的模式无效")。故 raw register 必须给完整
+ *   JSON Schema 包装(与本文件 resultSchema 同理),不能沿用 defineTool 的
+ *   简化 spec 形态。
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { AuditLogger } from '../audit/logger';
@@ -69,6 +77,24 @@ export class MemoryTools {
     };
   }
 
+  /**
+   * raw register 的 parameters 必须是 object-rooted JSON Schema
+   * (schemaOf 原样透传上游;缺顶层 type 会被 Console Go 等拒收为
+   * "type: null")。从 per-property 定义编译出 { type:'object', properties, required }。
+   */
+  private static parameterSchema(props: Record<string, { type: string; description: string; required?: boolean }>) {
+    const required: string[] = [];
+    const properties: Record<string, unknown> = {};
+    for (const [key, def] of Object.entries(props)) {
+      const { required: isRequired, ...rest } = def;
+      if (isRequired) required.push(key);
+      properties[key] = rest;
+    }
+    const schema: Record<string, unknown> = { type: 'object', properties };
+    if (required.length > 0) schema.required = required;
+    return schema;
+  }
+
   // ---------- memos_lookup ----------
   private lookupTool(): unknown {
     return {
@@ -77,10 +103,10 @@ export class MemoryTools {
         '查询 MemOS 教训库(只读):返回当前 active 且已确认的教训(过滤 superseded/merged/archived)。' +
         '参数 query:任务意图/场景关键词;limit:返回条数(默认 3,最多 5)。' +
         '返回每条教训的 patternKey、失败次数、重要性与正文。不要在不知道经验时重复踩坑——先查。',
-      parameters: {
+      parameters: MemoryTools.parameterSchema({
         query: { type: 'string', required: true, description: '任务意图或场景关键词' },
-        limit: { type: 'integer', required: false, description: '返回条数,默认 3' },
-      },
+        limit: { type: 'integer', description: '返回条数,默认 3' },
+      }),
       output: MemoryTools.resultSchema('object', {
         ok: { type: 'boolean' },
         recalled: { type: 'array' },
@@ -112,9 +138,9 @@ export class MemoryTools {
         '声明本轮将遵守某条已注入/已查询的教训(O6 配套)。' +
         '参数 patternKey:教训的 patternKey(取自 memos_lookup 或注入块)。' +
         '调用后系统记录"已声明遵守",若本轮仍违反则该教训 violation 权重×2。',
-      parameters: {
+      parameters: MemoryTools.parameterSchema({
         patternKey: { type: 'string', required: true, description: '要遵守的教训 patternKey' },
-      },
+      }),
       output: MemoryTools.resultSchema('boolean'),
       execute: async (args: { patternKey?: string }) => {
         const pk = (args?.patternKey ?? '').trim();
@@ -136,10 +162,10 @@ export class MemoryTools {
         '参数 memoryKey:账本 memoryKey(取自身 memos_lookup 返回);reason:更正理由(≥10 字符)。' +
         '本工具只登记更正请求(记入审计),真正 v+1 修正仍由反思闭环决定 —— 防止 agent 顺手乱写。' +
         '每日上限 5 次。',
-      parameters: {
+      parameters: MemoryTools.parameterSchema({
         memoryKey: { type: 'string', required: true, description: '账本 memoryKey' },
         reason: { type: 'string', required: true, description: '更正理由(≥10 字符)' },
-      },
+      }),
       output: MemoryTools.resultSchema('object', {
         ok: { type: 'boolean' },
         registered: { type: 'string' },
