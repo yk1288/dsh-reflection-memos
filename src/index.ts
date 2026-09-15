@@ -28,6 +28,7 @@ export const inject = [
   'sessions',
   'commands',
   'tools',
+  'timer',
   'subagents',
   'skills',
   'goals',
