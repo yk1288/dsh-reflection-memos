@@ -171,7 +171,15 @@ opencode-memos-reflection/
 - `loop/applier` 双区检索（核心区常驻教训 / 情境区按意图）+ `memos_lesson_ack` 提示
 - **验收**：新会话提问能引用先前写入的记忆；审计中出现 lesson-injection 记录；召回延迟可测（目标 < 100ms 缓存命中）
 
-### P6 记忆工具 + 遵守验证（1 天）
+### P6 记忆工具 + 遵守验证（1 天）✅ **完成（2026-09-23，模型真实调用）**
+- **实测**：`ctx.tool.transform` 注册三工具（object-rooted schema 被上游接受）；模型真实调用
+  `memos_lookup` 并**自发** `memos_lesson_ack` 声明遵守；回复开头"本轮经验应用：…"证明教训被应用
+- **接线改造**（cordis → OpenCode）：注入登记在 `context` hook（`recall.lessons → recordApplied`）；
+  回合切片由 Observer `turnMark` 完成；判定 `compliance.evaluate()` 先于反思 defer 执行；
+  `onSignal` 回调替代 `ctx.emit`；self-eval 信号与任务反思合并（单飞）
+- **实测判定链**：`turn/end applied=1 → violated → 信号 lesson/violated → evolution.db violationCount=1`
+- 已知启发式乐观偏差（预期性命中关键词也计违反）为 DSH 同款，`violatesOnCompleted` 可关；
+  `scripts/seed-lesson.ts` 播种已确认教训；smoke 124 断言；详见新仓库 `docs/event-probe.md` §15
 - `ctx.tool.transform` 注册 3 个工具（**input 必须 object-rooted JSON Schema**）：`memos_lookup`（只读）、`memos_lesson_ack`、`memos_correct`（每日限额 + reason 护栏）
 - `loop/compliance`：`execute.after` 结果 + 成功/失败信号 → 账本 violation/complied 计数（误报收紧规则一并移植）
 - **验收**：3 个工具真实调用成功；注入教训后能统计遵守/违反
