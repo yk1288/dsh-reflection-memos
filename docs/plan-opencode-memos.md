@@ -120,13 +120,13 @@ opencode-memos-reflection/
 > ⑤ 端到端实测：`reflect-done facts=4 lessons=3 ingested=4 failed=3`（lessons 因
 > `failureCount<2` 被 gate 正确拒收），WriteGate→MemOS add+search 验证→evolution.db+audit jsonl 全部落盘。
 
-### P0 对接探针（0.5 天）
+### P0 对接探针（0.5 天）✅ **完成（2026-09-23，见上方实测结果）**
 - 建包骨架，`opencode.jsonc` 本地路径加载，确认插件 `setup`/`cleanup` 生命周期
 - **实测并记录**：`ctx.event.subscribe()` 的事件名与字段（写入 `docs/event-probe.md`）；确认"会话回合结束"事件
 - 实测 `ctx.generate.text()` 出 JSON 的稳定性（选定 reviewer 模型，记录 3 个候选）
 - **验收**：插件加载日志 + 事件清单 + 1 条合法 JSON 样例
 
-### P1 核心域移植（1 天）
+### P1 核心域移植（1 天）✅ **完成（2026-09-23，smoke 92/92 + 真实 MemOS 写→验→召回）**
 - 搬运 `core/ + backends/ + types/ + prompts/ + audit/`，替换宿主依赖（credentials、路径）
 - 移植 `tests/smoke.ts` 至全绿；`e2e-memos-verify.ts` 直连真实 MemOS 写→验→召回
 - **验收**：92 断言全绿 + 真实 MemOS 写入/验证通过（尚未接入会话）
