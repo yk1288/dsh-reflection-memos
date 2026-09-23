@@ -108,6 +108,18 @@ opencode-memos-reflection/
 > ② 事件流是**全局**的，必须按 `event.location.directory` 过滤；③ 本地目录插件按 `<包根>/index.ts` 解析、
 > 不读 `package.json#exports`（缺根 index.ts 会静默不加载）。P2/P4 的触发点与过滤逻辑据此细化。
 
+> **P2/P3 实测结果（2026-09-23，OpenCode v2.0.14）**：观察层+反思层+自动闭环全链路打通，
+> 证据落库 `docs/event-probe.md` §8–§12（新仓库）。要点：
+> ① **D2 修正**：`ctx.generate.text` 不可用（free-tier 与 opencode-go 均因"缺会话上下文"被上游拒绝），
+> 唯一可用通道是**专用 Reviewer 会话的 `session.generate` 瞬态生成**（不改会话历史、不发事件 → 递归机制上不可能）；
+> ② `session.generate` 三条调用纪律：setup 期间必死锁、钩子同步上下文内挂起（须 `setTimeout` 出栈）、
+> 超时给 `reflectionTimeoutMs`(120s)；
+> ③ Reviewer 模型**不指定=继承全局默认**（实测 opencode-go 需订阅，本机不可用）；
+> ④ 一次性 `opencode run` 在响应后 ~400ms shutdown，会截断 turn-end 反思——可靠自动反思依赖 TUI/serve，
+> 回合内触发（tool-failed/correction）不受影响；
+> ⑤ 端到端实测：`reflect-done facts=4 lessons=3 ingested=4 failed=3`（lessons 因
+> `failureCount<2` 被 gate 正确拒收），WriteGate→MemOS add+search 验证→evolution.db+audit jsonl 全部落盘。
+
 ### P0 对接探针（0.5 天）
 - 建包骨架，`opencode.jsonc` 本地路径加载，确认插件 `setup`/`cleanup` 生命周期
 - **实测并记录**：`ctx.event.subscribe()` 的事件名与字段（写入 `docs/event-probe.md`）；确认"会话回合结束"事件
@@ -119,15 +131,21 @@ opencode-memos-reflection/
 - 移植 `tests/smoke.ts` 至全绿；`e2e-memos-verify.ts` 直连真实 MemOS 写→验→召回
 - **验收**：92 断言全绿 + 真实 MemOS 写入/验证通过（尚未接入会话）
 
-### P2 观察层 Observer（1 天）
+### P2 观察层 Observer（1 天）✅ **完成（2026-09-23）**
 - `ctx.event.subscribe` 环形缓冲（每会话 ≤2000 条，超限截断）+ `ctx.tool.hook('execute.*')` 补充工具成败
 - "值得反思"过滤、冷却（30min）、熔断（连败 3 次暂停 30min）、**排除自反思/子会话**（按 `parentID` 或本插件标记）
 - **验收**：跑一个真实会话，审计日志能看到轨迹摘要与触发判定（含"不值得反思"被过滤的用例）
+- **实测**：三类触发器（tool-failed/task-complete[成功→task·失败→deep]/user-correction）+ 单飞锁 +
+  location 过滤（`filteredLocations:2`）+ 跨 plugin reload 存活，全部实况验证通过
 
-### P3 反思层 Reflector（1 天）
-- `ctx.generate.text({ model, prompt })` + REVIEWER_PERSONA + `extractJsonObject` + 可重试（非 JSON/空输出重试 1 次）
+### P3 反思层 Reflector（1 天）✅ **完成（2026-09-23，通道按实测改道）**
+- ~~`ctx.generate.text({ model, prompt })`~~ → **专用 Reviewer 会话 `ctx.session.generate({sessionID, prompt})`**
+  （`modules/reviewer-session.ts`：按 location 持久化 sessionID 复用、不指定模型继承全局默认、
+  创建即从观察层排除；生成通道的坑与调用纪律见新仓库 `docs/event-probe.md` §8）
+- REVIEWER_PERSONA + `extractJsonObject` + 可重试（非 JSON/空输出按 `maxReflectionRetries` 重试）
 - 三审预过滤（证据 ≥20 字符、置信度阈值）
 - **验收**：给定一段轨迹能稳定产出合法 ReflectionResult（连续 5 次）
+- **实测**：selfTest 合成轨迹 + 真实失败轨迹均产出合法 JSON（热 11s / 冷 34.5s），三审正常过滤
 
 ### P4 写入闭环 MVP（1 天）⭐ 可交付最小版本
 - `MemoryStore + WriteGate` 接线（writer 惰性解析，密钥缺失时降级只读并告警）
@@ -166,9 +184,9 @@ opencode-memos-reflection/
 | # | 决策 | 推荐 ✅ | 备选 |
 |---|---|---|---|
 | D1 | 代码复用策略 | ✅ **先复制跑通（P1–P4），闭环绿后再抽共享包** `memos-reflection-core`，两个插件共用（避免一开始就动 DSH 生产代码） | 立即抽 monorepo 共享包 |
-| D2 | Reviewer 实现 | ✅ **`ctx.generate.text()`**：无会话无工具 → 不会再触发自己的反思（DSH 曾为此把 maxDepth 放到 32），实现最短 | 注册 `reviewer` agent + `session.create/prompt`（可拿结构化输出，但需按 parentID 防递归） |
+| D2 | Reviewer 实现 | ✅ **专用 Reviewer 会话 + `session.generate` 瞬态生成**（2026-09-23 实测修正：`ctx.generate.text` 因缺会话上下文被上游拒绝；瞬态生成不改会话历史、不发会话事件 → 递归机制上不可能，比原方案更硬） | ~~`ctx.generate.text()`~~（实测不可用）；`session.create/prompt` 全量回合（会写历史、带工具，次选） |
 | D3 | 召回（读放开） | ✅ **同插件 `context` hook 自动召回**，读写一体、零额外插件 | 仅提供 `memos_search` 工具，让 Agent 自己决定何时查 |
-| D4 | 账本/审计存储 | ✅ **账本用 `ctx.storage`（`ledger/<key>` 前缀 scan），审计用 JSONL 落盘**（`~/.local/share/opencode/memos-reflection/`） | 全部落本地文件（与 DSH 最像，但脱离 OpenCode 数据目录） |
+| D4 | 账本/审计存储 | ✅ **XDG 数据目录文件后端**（`~/.local/share/opencode/memos-reflection/`，`evolution.db` JSONL+fsync 原子写；2026-09-23 落地时**偏离原推荐 `ctx.storage`**：文件后端同步读写、原子性自控，且与审计 JSONL/探针/Reviewer 会话表同目录，多进程共享靠 ledger fingerprint 去重） | `ctx.storage`（`ledger/<key>` 前缀 scan，API 面更"官方"但异步且不便多文件协同） |
 | D5 | 配置来源 | ✅ **`opencode.jsonc` → `plugins[].options`（读 `ctx.options`）+ env 密钥** | 保持 settings.yaml 风格（OpenCode 无对应机制） |
 | D6 | 与其它 MemOS 插件并存 | ✅ 默认**接管全部写入**，`recall.enabled` 可关（避免重复注入/重复写） | 依赖对方插件做召回 |
 | D7 | 反思执行时机 | ✅ 会话空闲事件后**异步队列 + 单飞锁**，绝不阻塞用户输入；`search` 验证轮询放同一后台队列 | 在 `context` hook 内同步反思（会拖慢每次模型调用，否决） |
