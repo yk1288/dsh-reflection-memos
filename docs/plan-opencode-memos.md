@@ -147,10 +147,16 @@ opencode-memos-reflection/
 - **验收**：给定一段轨迹能稳定产出合法 ReflectionResult（连续 5 次）
 - **实测**：selfTest 合成轨迹 + 真实失败轨迹均产出合法 JSON（热 11s / 冷 34.5s），三审正常过滤
 
-### P4 写入闭环 MVP（1 天）⭐ 可交付最小版本
+### P4 写入闭环 MVP（1 天）⭐ 可交付最小版本 ✅ **完成（2026-09-23，全链实测）**
 - `MemoryStore + WriteGate` 接线（writer 惰性解析，密钥缺失时降级只读并告警）
 - 自动链路：会话空闲 → 冷却/熔断判定 → **后台异步**反思 → WriteGate → `search` 验证 → 账本/审计
-- 命令：`/reflect`（手动）、`/memos-stat`（统计）、`/lesson-confirm`（pending 分流）
+  - **实测**：`reflect-done facts=4 lessons=3 ingested=4 failed=3`（lessons 因 `failureCount<2`
+    被 gate 正确拒收），evolution.db + audit jsonl 落盘；密钥缺失降级与跨进程熔断也已实测
+- 命令：`/reflect`（手动）、`/memos-stat`（统计）、`/lesson-confirm`（pending 分流）✅
+  - **实测**：注册 `ctx.command.transform`；入口为 `session.command` API（`opencode run` 不路由
+    斜杠命令）；输出用 `session.synthetic(resume:false, description)` 回显（description 是 TUI
+    可见性开关）；`/reflect` 走"出栈 hop → generate → refiner"全链 3s 完成
+  - 详细结论见新仓库 `docs/event-probe.md` §13；smoke 106 断言
 - **验收**：真实环境 7 项全绿（写入、验证、账本、审计、统计、手动触发、自动触发）
 
 ### P5 召回（读放开）+ 教训注入（1.5 天）
