@@ -184,7 +184,13 @@ opencode-memos-reflection/
 - `loop/compliance`：`execute.after` 结果 + 成功/失败信号 → 账本 violation/complied 计数（误报收紧规则一并移植）
 - **验收**：3 个工具真实调用成功；注入教训后能统计遵守/违反
 
-### P7 演化与报告（1 天）
+### P7 演化与报告（1 天）✅ **完成（2026-09-23）**
+- **实测**：每日作业（`evolution{dailyJob,dailyJobHour}` 默认 04:00；30min tick + 启动即查
+  可跨重启补跑）启动即触发 `每日作业完成 decay=0 errors=0`；`/evolve --promote --auto-ack`
+  flag 解析正确并回显；`/memory-report` 真实报告（账本 5 条/active 100%/教训效果命中）
+- **移植修复**：DSH `/--promote/` flag 解析 bug（`-` 与空格间无 `` → flag 从未生效）
+  改为 token 精确匹配；skillsDir 迁至 `<数据目录>/skills`
+- 新增配置 `evolution{dailyJob,dailyJobHour}`；smoke 128 断言；详见新仓库 `docs/event-probe.md` §16
 - `/evolve`（衰减/合并/晋升/会话整合/auto-ack）、`/memory-report`、`/lesson-check`
 - 每日 `setInterval`（decay + autoAcknowledge），cleanup 清理定时器
 - 晋升 Skill：`ctx.skill.transform(add)` 写入 OpenCode skill（替代 `~/.dsh/skills/`）
