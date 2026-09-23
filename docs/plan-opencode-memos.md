@@ -196,7 +196,16 @@ opencode-memos-reflection/
 - 晋升 Skill：`ctx.skill.transform(add)` 写入 OpenCode skill（替代 `~/.dsh/skills/`）
 - **验收**：老化条目状态迁移可观察；报告输出含元优化建议；Skill 出现在 `ctx.skill.list()`
 
-### P8 打包、安装与文档（1 天）
+### P8 打包、安装与文档（1 天）✅ **完成（2026-09-23，干净目录 7/7 验收）**
+- **入口解析源码实锤**：npm 分支只认 `exports["./server"]`/`main`（否则
+  “does not expose a server entrypoint”），本地 path 走目录 `index.ts` 兜底 → 本包三处入口全配；
+  npm 包名形态按注册表安装（`Npm.add`），发布前用 `--path`
+- `scripts/install.mjs`：幂等一键安装（JSONC 容错、双条目形态识别、env 校验 + 下一步提示）
+- README：三步安装（本地/npm）、5 命令 + 3 工具表、MemOS 端点对应、已知坑 ×9、发布命令
+- **验收**：干净目录 3 步安装（幂等 ✓）→ 插件加载 → **P4 闭环复跑 7/7 全过**
+  （`reflect-done facts=2 ingested=2` 真实写入；新目录模型直接复用全局教训作答
+  “（遵循 MemOS 教训）”）；`npm pack` 35 文件/114KB 就绪待发布
+- 详见新仓库 `docs/event-probe.md` §17
 - `tsup` 构建、`exports {".", "./rpc"}`、npm 发布（或本地 path 引用）
 - `scripts/install.mjs`：幂等向 `opencode.jsonc` 写入 plugins 条目 + 校验 env + 打印提示
 - README：配置样例、命令表、与 MemOS 端点的对应关系、已知坑
