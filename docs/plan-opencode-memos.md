@@ -159,7 +159,14 @@ opencode-memos-reflection/
   - 详细结论见新仓库 `docs/event-probe.md` §13；smoke 106 断言
 - **验收**：真实环境 7 项全绿（写入、验证、账本、审计、统计、手动触发、自动触发）
 
-### P5 召回（读放开）+ 教训注入（1.5 天）
+### P5 召回（读放开）+ 教训注入（1.5 天）✅ **完成（2026-09-23，模型自证）**
+- 同插件 `context` hook 自动召回 + 记忆使用规则（D3 落地）
+- **注入面实测**：`SessionContext.system` 可变数组直接 `push({type:'text'})`（比 DSH
+  "首条 user 消息前插入"干净）；每 step 触发 → TTL 缓存压网络（step2 实测缓存命中）
+- **实测**：模型自证"注入区块：有…共 5 条…"并原文引用第一条记忆；Reviewer 会话
+  双保险排除（id 集合 + isExcluded + 空意图短路）；密钥缺失降级本地教训
+- 新增 `recall{enabled,minRelativity,limit,cacheTtlMs,minIntentChars}`；smoke 116 断言；
+  详见新仓库 `docs/event-probe.md` §14
 - `ctx.session.hook('context')`：注入 MEMO_RULES + 最近用户意图的 `/search/memory` 结果（按 session+意图缓存 60s，限条数与字符预算）
 - `loop/applier` 双区检索（核心区常驻教训 / 情境区按意图）+ `memos_lesson_ack` 提示
 - **验收**：新会话提问能引用先前写入的记忆；审计中出现 lesson-injection 记录；召回延迟可测（目标 < 100ms 缓存命中）
