@@ -229,6 +229,13 @@ opencode-memos-reflection/
 产物 `plan-ok.txt=PLAN_OK`，smoke 161 断言。**DSH 对照已无剩余成体系缺口**。
 详见新仓库 `docs/event-probe.md` §18–§19。
 
+**缺陷审计轮（2026-09-24）**：修复 3 个真缺陷 —— D1 `foldRecurrence` 未过滤 active
+（**DSH 同构 bug**：correct 后复发会折叠到 superseded 旧版，DSH 侧建议同样补
+`.filter(e => e.status === 'active')`）、D2 计划完成反思未受 `enableTaskReflection` 控制、
+D3 planner 与 Reviewer 同会话并发风险（独立会话隔离）；撤回一个无法实现的配置
+（宿主插件 API 无会话删除原语，执行会话留存为文档化债务）。全量验证电池 **13/13**
+（typecheck/smoke164/单文件/pack/e2e 7-7/P9 回归/四命令/召回触发），详见新仓库 §20。
+
 ## 6. 关键设计决策（推荐项已标 ✅，其余待你确认）
 
 | # | 决策 | 推荐 ✅ | 备选 |
