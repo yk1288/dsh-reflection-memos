@@ -215,6 +215,15 @@ opencode-memos-reflection/
 
 ---
 
+## 5.5 移植补齐记录（2026-09-24，DSH 对照审计）
+
+对照 DSH 全量功能（7 命令/事件订阅/配置键/README 功能声明）审计后补齐 4 件：
+① `lesson/correct-request` → 账本 v+1 落地（优化 #7，实调 memos_correct 验证新版本召回）；
+② `/lesson-check`（6 命令齐）；③ 周期反思接线（原悬空键，实测 level=periodic ×2）；
+④ e2e 命名空间 `dsh:` → `opencode:`（7/7 全绿）。smoke 141 断言。
+**唯一 scope 外未移植**：`/plan-and-execute` + planner/executor（子任务自动推进，依赖
+`agent.runMaintenance`，OpenCode 需重新设计，待决策）。详见新仓库 `docs/event-probe.md` §18。
+
 ## 6. 关键设计决策（推荐项已标 ✅，其余待你确认）
 
 | # | 决策 | 推荐 ✅ | 备选 |
