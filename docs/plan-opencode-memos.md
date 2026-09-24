@@ -221,8 +221,13 @@ opencode-memos-reflection/
 ① `lesson/correct-request` → 账本 v+1 落地（优化 #7，实调 memos_correct 验证新版本召回）；
 ② `/lesson-check`（6 命令齐）；③ 周期反思接线（原悬空键，实测 level=periodic ×2）；
 ④ e2e 命名空间 `dsh:` → `opencode:`（7/7 全绿）。smoke 141 断言。
-**唯一 scope 外未移植**：`/plan-and-execute` + planner/executor（子任务自动推进，依赖
-`agent.runMaintenance`，OpenCode 需重新设计，待决策）。详见新仓库 `docs/event-probe.md` §18。
+原"唯一 scope 外"项 **已立项完成（2026-09-24，P9）**：`/plan-and-execute` + planner/executor
+按宿主重新设计 —— 瞬态 `session.generate` 规划（保留 DSH 兜底计划/重试语义）、每步独立执行会话
+（`excludeSession` 防递归、headless 权限 allow、超时 interrupt、`maxSubtasks` 截断）、事件捕获取输出
+（插件无 message 读取面）、`onSubtaskFailed` 即时反思 + `onPlanCompleted` 完成反思。
+实测 4 步计划全绿（`ls /tmp` headless 通过）、完成反思 `facts=4 ingested=4` 真实写入、
+产物 `plan-ok.txt=PLAN_OK`，smoke 161 断言。**DSH 对照已无剩余成体系缺口**。
+详见新仓库 `docs/event-probe.md` §18–§19。
 
 ## 6. 关键设计决策（推荐项已标 ✅，其余待你确认）
 
