@@ -63,17 +63,35 @@ export class MemoryTools {
     }
   }
 
-  /** 简化 spec(非 JSON-Schema 包装)+ output 合约(dsh-tools 强制) */
-  private static resultSchema(type: 'object' | 'boolean', props?: Record<string, unknown>) {
-    // boolean 类型不允许带 properties(dsh-tools 校验)
-    const schema = type === 'boolean' ? { type: 'boolean' } : { type: 'object', properties: props ?? {} };
+  /**
+   * 简化 spec(非 JSON-Schema 包装)+ output 合约(dsh-tools 强制)。
+   *
+   * 实测修复(2026-09-28,线上事故):
+   * 1. `render` 的合约是 `ContentBlock[]`(dsh-tools/lib/types/index.d.ts),
+   *    **不能返回裸字符串**。此前返回 JSON.stringify(...) 字符串时,
+   *    createSuccessResult→snapshotProjection 只校验 JSON 可无损序列化,字符串被
+   *    原样提交为 tool-result.content;下一轮请求组装时共享的 contentHasImage
+   *    递归 `content.some(...)` 抛 `TypeError: content.some is not a function`,
+   *    且污染消息持久化在会话历史里,之后每轮 turn 第一步必崩
+   *    (session-472a5866, seq 1013+)。
+   * 2. schema 必须与 execute 返回形状一致:三个工具的成功/失败路径返回的都是
+   *    `{ ok, ... }` 对象,声明 `boolean` 会让对象结果被 validateJsonSchemaValue
+   *    判为 INVALID_TOOL_OUTPUT(ackTool 此前即如此)。
+   * 回归脚本:scripts/repro-render-contract.ts。
+   */
+  private static resultSchema(props?: Record<string, unknown>) {
+    // 恒为 object-rooted:与 execute 返回的 { ok, ... } 对齐。
+    // 未声明的附加字段(如 error/current/note)默认允许(additionalProperties 未关)。
+    const schema = { type: 'object' as const, properties: props ?? {} };
     return {
       schema,
-      // render 要返回 agent 可读文本;否则实战 tool/result 变成 "[object Object]"
-      render: (_args: unknown, value: unknown) =>
-        typeof value === 'string'
-          ? value
-          : JSON.stringify(value, null, 2),
+      // render 必须返回内容块数组(文本块),供模型/图片扫描安全递归
+      render: (_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> => [
+        {
+          type: 'text',
+          text: typeof value === 'string' ? value : JSON.stringify(value, null, 2),
+        },
+      ],
     };
   }
 
@@ -107,8 +125,9 @@ export class MemoryTools {
         query: { type: 'string', required: true, description: '任务意图或场景关键词' },
         limit: { type: 'integer', description: '返回条数,默认 3' },
       }),
-      output: MemoryTools.resultSchema('object', {
+      output: MemoryTools.resultSchema({
         ok: { type: 'boolean' },
+        current: { type: 'array' },
         recalled: { type: 'array' },
       }),
       execute: async (args: { query?: string; limit?: number }) => {
@@ -141,7 +160,11 @@ export class MemoryTools {
       parameters: MemoryTools.parameterSchema({
         patternKey: { type: 'string', required: true, description: '要遵守的教训 patternKey' },
       }),
-      output: MemoryTools.resultSchema('boolean'),
+      output: MemoryTools.resultSchema({
+        ok: { type: 'boolean' },
+        acknowledged: { type: 'boolean' },
+        patternKey: { type: 'string' },
+      }),
       execute: async (args: { patternKey?: string }) => {
         const pk = (args?.patternKey ?? '').trim();
         if (!pk) return { ok: false, error: 'patternKey 不能为空' };
@@ -166,9 +189,10 @@ export class MemoryTools {
         memoryKey: { type: 'string', required: true, description: '账本 memoryKey' },
         reason: { type: 'string', required: true, description: '更正理由(≥10 字符)' },
       }),
-      output: MemoryTools.resultSchema('object', {
+      output: MemoryTools.resultSchema({
         ok: { type: 'boolean' },
         registered: { type: 'string' },
+        memoryKey: { type: 'string' },
       }),
       execute: async (args: { memoryKey?: string; reason?: string }) => {
         const key = (args?.memoryKey ?? '').trim();
