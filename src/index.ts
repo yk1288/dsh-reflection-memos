@@ -251,6 +251,9 @@ export function apply(ctx: Context, initialConfig: Config): void {
         failureCount: Math.max(old.failureCount, 1),
         scenarios: old.scenarios,
         triage: old.triage,
+        // D1 配套(2026-09-28):真正递增版本号(note 一直写 corrected-v{n+1},
+        // 但 version 字段此前未传 → 新旧并列 v1,折叠/合并排序失去依据)
+        version: old.version + 1,
         note: `${old.note ?? ''} corrected-v${old.version + 1}`,
       });
       corrected.supersedes = [old.memoryKey];

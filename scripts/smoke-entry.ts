@@ -27,6 +27,7 @@ import { AuditLogger } from '../src/audit/logger';
 import type { EvolutionEntry } from '../src/types/evolution';
 import type { ReflectionResult } from '../src/types/reflection';
 import type { MemOSWriter } from '../src/backends/memos-backend';
+import { registerCommands, hasFlag } from '../src/commands/index';
 
 let passed = 0;
 let failed = 0;
@@ -717,6 +718,7 @@ console.log('\n[11] #3-#7 优化项');
     content: old.contentHash + ' [更正] 实际应优先 launch-stop',
     kind: 'lesson', patternKey: old.patternKey, importance: old.importance,
     failureCount: old.failureCount, scenarios: old.scenarios, triage: old.triage,
+    version: old.version + 1,
   });
   corrected.supersedes = [old.memoryKey];
   store.ledger.upsert(corrected);
@@ -725,6 +727,63 @@ console.log('\n[11] #3-#7 优化项');
   store.ledger.upsert(old);
   const cNew = store.ledger.get(corrected.memoryKey)!;
   assert('#7: correct 生成 v+1 新版本且旧版 superseded', cNew.contentHash.includes('更正') && store.ledger.get(old.memoryKey)?.status === 'superseded');
+  assert('#7: correct 新版 version 真正递增', cNew.version === old.version + 1, JSON.stringify({ old: old.version, now: cNew.version }));
+}
+
+// ---------- 12. 缺陷审计同补(2026-09-28):/evolve flag 解析 + fold 只折叠 active ----------
+console.log('\n[12] 缺陷审计同补(D1 fold 过滤 active / D-flag 命令解析)');
+{
+  // (1) hasFlag:token 精确匹配(原 /\b--promote\b/ 对真实参数恒 false)
+  assert('#D-flag: hasFlag 命中 --promote', hasFlag('--promote', '--promote') === true);
+  assert('#D-flag: hasFlag 命中混合参数', hasFlag('--promote --auto-ack', '--auto-ack') === true);
+  assert('#D-flag: hasFlag 不误命中相似 token', hasFlag('--promote-x', '--promote') === false && hasFlag('', '--promote') === false);
+
+  // (2) 命令级:/evolve 真实 handler 的 flag → evolver.run(jobs)
+  const registered: any[] = [];
+  const cmdCtx = { commands: { register: (c: any) => { registered.push(c); } }, logger: { warn: () => {}, info: () => {} } };
+  let captured: any = null;
+  const evolverStub = { run: async (jobs: any) => { captured = jobs; return { decayed: 0, revived: 0, archived: 0, consolidated: 0, synthesized: 0, autoAcknowledged: 0, promoted: [], errors: [] }; } };
+  const stubStore = { ledger: { query: () => [], get: () => undefined } };
+  registerCommands(cmdCtx as never, {
+    getReflector: () => ({}) as never, getRefiner: () => ({}) as never, getObserver: () => ({}) as never,
+    getExecutor: () => ({}) as never, getPlanner: () => ({}) as never, getStore: () => stubStore as never,
+    getApplier: () => ({}) as never, getEvolver: () => evolverStub as never, getReporter: () => ({}) as never,
+    getCompliance: () => ({}) as never, getMemoryTools: () => ({}) as never,
+  } as never);
+  const evolve = registered.find((c) => c.name === 'evolve');
+  assert('#D-flag: /evolve 命令已注册', !!evolve);
+  await evolve.handler({ rawInput: '--promote --auto-ack' });
+  assert('#D-flag: /evolve --promote --auto-ack 生效', captured?.promote === true && captured?.autoAcknowledge === true, JSON.stringify(captured));
+  await evolve.handler({ rawInput: '' });
+  assert('#D-flag: /evolve 无参不误开 flag', captured?.promote === false && captured?.consolidate === false && captured?.autoAcknowledge === false, JSON.stringify(captured));
+  await evolve.handler({ rawInput: '--promote-x --auto-acknowledge' });
+  assert('#D-flag: 相似 token 不误开', captured?.promote === false && captured?.autoAcknowledge === false, JSON.stringify(captured));
+
+  // (3) D1:correct 后复发折叠到 active 新版(不再落到 superseded 旧版)
+  const d1Audit = new AuditLogger(`/tmp/sia-d1-audit-${Date.now()}`);
+  const d1Store = new MemoryStore({ writerProvider: null, audit: d1Audit, ledgerDir: `/tmp/sia-d1-${Date.now()}` });
+  const d1Old = d1Store.ledger.createEntry({ content: 'D1:原教训(未查端口占用)', kind: 'lesson', patternKey: 'd1.port', failureCount: 1, triage: 'pending' });
+  d1Store.ledger.upsert(d1Old);
+  const d1New = d1Store.ledger.createEntry({ content: 'D1:更正后教训(先查端口再优雅停止)', kind: 'lesson', patternKey: d1Old.patternKey, failureCount: 1, triage: d1Old.triage, version: d1Old.version + 1 });
+  d1New.supersedes = [d1Old.memoryKey];
+  d1Store.ledger.upsert(d1New);
+  d1Old.status = 'superseded';
+  d1Old.supersededBy = d1New.memoryKey;
+  d1Store.ledger.upsert(d1Old);
+  const d1Hit = d1Store.ledger.foldRecurrence(d1Old.patternKey, 'lesson');
+  assert('#D1: correct 后复发折叠到 active 新版', d1Hit?.memoryKey === d1New.memoryKey && d1Hit?.status === 'active', JSON.stringify(d1Hit && { key: d1Hit.memoryKey.slice(0, 8), status: d1Hit.status }));
+  assert('#D1: superseded 旧版计数不被虚增', d1Store.ledger.get(d1Old.memoryKey)?.failureCount === 1, String(d1Store.ledger.get(d1Old.memoryKey)?.failureCount));
+
+  // (4) 过滤的是 status 而非排序:superseded 版本更高也必须跳过
+  const d1bStore = new MemoryStore({ writerProvider: null, audit: d1Audit, ledgerDir: `/tmp/sia-d1b-${Date.now()}` });
+  const d1bDead = d1bStore.ledger.createEntry({ content: 'D1b:死版本 v9', kind: 'lesson', patternKey: 'd1b.k', failureCount: 3, version: 9 });
+  d1bStore.ledger.upsert(d1bDead);
+  d1bDead.status = 'superseded';
+  d1bStore.ledger.upsert(d1bDead);
+  const d1bLive = d1bStore.ledger.createEntry({ content: 'D1b:活版本 v1', kind: 'lesson', patternKey: 'd1b.k', failureCount: 1, version: 1 });
+  d1bStore.ledger.upsert(d1bLive);
+  const d1bHit = d1bStore.ledger.foldRecurrence('d1b.k', 'lesson');
+  assert('#D1: 高版本 superseded 也跳过(status 过滤生效)', d1bHit?.memoryKey === d1bLive.memoryKey && d1bHit?.version === 1, JSON.stringify(d1bHit && { key: d1bHit.memoryKey.slice(0, 8), version: d1bHit.version, status: d1bHit.status }));
 }
 
 // ---------- 辅助 ----------

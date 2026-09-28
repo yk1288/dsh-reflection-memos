@@ -114,7 +114,10 @@ export class EvolutionLedger {
    * 返回折叠对象;无命中返回 null(调用方决定新建)。
    */
   foldRecurrence(patternKey: string, kind: MemoryKind): EvolutionEntry | null {
-    const candidates = this.backend.query({ patternKey, kind });
+    // D1(2026-09-28 缺陷审计,DSH 同构 bug):必须只折叠到 active 条目。
+    // correct 闭环后旧版被置 superseded,若不过滤,版本并列时稳定排序会命中
+    // superseded 死版本 —— active 新版的 failureCount 永不增长、旧版计数虚高。
+    const candidates = this.backend.query({ patternKey, kind }).filter((e) => e.status === 'active');
     if (candidates.length === 0) return null;
     const hit = candidates.sort((a, b) => b.version - a.version)[0];
     hit.failureCount += 1;

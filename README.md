@@ -258,6 +258,17 @@ src/
 
 ## 开发日志
 
+### 2026-09-28(opencode 移植计划对照审计 → DSH 同补两个真缺陷)
+
+- 上游更新:12 个提交仅新增 `docs/plan-opencode-memos.md`(opencode × MemOS 移植实施计划,P0-P9 全完成 + 缺陷审计轮),文档点名「**DSH 同补**」两个缺陷
+- **D1 `foldRecurrence` 未过滤 active**:correct 闭环后旧版置 superseded,复发折叠仍会命中死版本 —— 实测复现:旧版 `8c890881`(superseded)failureCount 1→2,active 新版 `52abfbed` 计数不增;且 correct 只写 `note corrected-v{n+1}` 而未真正递增 `version`(新旧并列 v1,排序失去依据)
+  - 修复:`core/ledger.ts` 折叠候选加 `.filter(e => e.status === 'active')`;`src/index.ts` correct 闭环补 `version: old.version + 1`
+  - 验证:修复前复现脚本 ❌ → 修复后 ✅;新增断言覆盖"correct 后折叠 active 新版""superseded 旧版计数不虚增""高版本 superseded 也必须跳过(status 过滤而非排序)"
+- **D-flag `/evolve` flag 解析从未生效**:原 `/\b--promote\b/` 中 `\b` 两侧均为非单词字符(空格/`-`)→ 对 `--promote`、` --promote`、`evolve --promote` 恒不匹配(仅 `x--promote` 畸形输入命中)
+  - 修复:`commands/index.ts` 新增并导出 `hasFlag()`(按空白切词全等比较),四处 flag 全部替换
+  - 验证:命令级回归 —— 用 stub 注册表捕获 `/evolve` handler,断言 `--promote --auto-ack` → `{promote:true, autoAcknowledge:true}`、无参全 false、相似 token(`--promote-x`)不误开
+- smoke 92 → **103 断言全绿**;`lib/` 重新构建;版本 0.1.2 重新安装进 web profile 并重启生效
+
 ### 2026-09-15(memos_* 工具 wire schema 修复)
 
 - 用户诊断:`memos_correct` 请求被上游拒绝 — `invalid_request_error: 函数 'memos_correct' 的模式无效:模式必须是 'type: "object"' 的 JSON Schema,但收到了 'type: null'`

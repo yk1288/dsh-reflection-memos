@@ -30,6 +30,16 @@ export interface ReflectionModules {
   getMemoryTools?: () => MemoryTools;
 }
 
+/**
+ * 命令 flag 精确匹配(token 级)。
+ * 缺陷(2026-09-28,移植侧实测暴露):原用 `/\b--promote\b/`,`\b` 要求两侧一单词一非单词,
+ * 而 `-` 与空格都是非单词字符 → 对 "--promote"/" --promote"/"evolve --promote" 恒不匹配,
+ * flag 从未生效(仅 "x--promote" 这类畸形输入会命中)。改为按空白切词后全等比较。
+ */
+export function hasFlag(args: string, flag: string): boolean {
+  return args.split(/\s+/).filter(Boolean).includes(flag);
+}
+
 export function registerCommands(
   ctx: Context,
   modules: ReflectionModules,
@@ -203,10 +213,10 @@ export function registerCommands(
       const args = (invocation?.rawInput ?? '').trim();
       const jobs = {
         decay: true,
-        promote: /\b--promote\b/.test(args),
-        consolidate: /\b--consolidate\b/.test(args),
-        synthesize: /\b--synthesize\b/.test(args),
-        autoAcknowledge: /\b--auto-ack\b/.test(args),
+        promote: hasFlag(args, '--promote'),
+        consolidate: hasFlag(args, '--consolidate'),
+        synthesize: hasFlag(args, '--synthesize'),
+        autoAcknowledge: hasFlag(args, '--auto-ack'),
       };
       const report = await evolver.run(jobs);
       const promoted = report.promoted.length > 0
