@@ -99,7 +99,10 @@ export class ApplierModule {
     const injectionMsg = {
       id: randomUUID(), // 消息 id 必需: harness assertMessageEventShape 要求 user/message 带非空 id
       role: 'user',
-      source: { kind: 'plugin', plugin: 'dsh-reflection-memos', form: 'lesson-injection', intent },
+      // ⚠️ DSH 0.2.0-rc.2 起 v4 原生写路径拒绝退役的 v3 包装 `kind:'plugin'`
+      // (SessionFormatError: format v4 message requires a producer-owned source kind)。
+      // 必须用"产出方自有 kind";对第三方插件,官方 v3→v4 迁移的等价产出是 `plugin:<name>`。
+      source: { kind: 'plugin:dsh-reflection-memos', form: 'lesson-injection', intent },
       content: [{ type: 'text', text: block }],
     };
     return [...messages.slice(0, index), injectionMsg, ...messages.slice(index)];

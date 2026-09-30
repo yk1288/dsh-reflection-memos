@@ -359,8 +359,19 @@ console.log('\n[5] M2 检索注入(双区):retrieval → applier');
     ],
   };
   const nextDecision = (applier as any).maybeInject(decision);
-  const injectedMsg = nextDecision.messages.find((m: any) => m?.source?.kind === 'plugin' && m?.source?.plugin === 'dsh-reflection-memos');
+  // DSH 0.2.0-rc.2 起 v4 拒绝退役的 v3 包装 kind:'plugin' → 必须是产出方自有 kind
+  const injectedMsg = nextDecision.messages.find(
+    (m: any) => m?.source?.kind === 'plugin:dsh-reflection-memos' && m?.source?.form === 'lesson-injection',
+  );
   assert('M2: applier 返回新 decision(不可变,含注入消息)', Boolean(injectedMsg), JSON.stringify(nextDecision.messages.map((m: any) => m.source?.kind)));
+  assert(
+    'M2: 注入消息 source 为产出方自有 kind(v4 合规,非退役 plugin 包装)',
+    Boolean(injectedMsg)
+      && typeof injectedMsg.source.kind === 'string'
+      && injectedMsg.source.kind.length > 0
+      && injectedMsg.source.kind !== 'plugin'
+      && !('plugin' in injectedMsg.source),
+  );
   const injectedText = injectedMsg?.content?.find((b: any) => b.type === 'text')?.text ?? '';
   assert('M2: 注入块存在且含教训文本', injectedText.includes('FTP 覆盖线上文件必须先备份'));
   assert('M2: 原 messages 未被修改(冻结安全)', decision.messages.length === 2 && decision.messages[1].content.length === 1);
