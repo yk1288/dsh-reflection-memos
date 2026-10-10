@@ -65,6 +65,9 @@ DSH Session ──▶ Observer ──▶ Reflector(三审) ──▶ refiner    
 | `/memos-stat` | 审计日志聚合统计 |
 | DSH 0.2.x / v4 会话兼容 | 0.1.5 起:peerDeps 同时接受 `0.1.x`/`0.2.x`;教训注入使用产出方自有 kind `plugin:dsh-reflection-memos`(v4 拒绝退役的 `kind:'plugin'`);实测 v4 会话注入落盘无 `SessionFormatError` |
 | 一键安装 v5.1 | `scripts/install.mjs`:JSONC 容错、双条目形态识别、幂等注入、环境变量校验与提示(0.1.6 打包) |
+| 每日演化可观测(0.1.7) | 每次 `decay+autoAcknowledge` 落 `{kind:'evolution-daily'}` 审计;`/memos-stat` 显示上次执行/下次计划 |
+| peer 预发布兼容(0.1.7) | peerDependencies 显式枚举 `0.1.1-rc.2 / 0.1.5-rc.1 / 0.2.0-rc.2 / 0.2.1-alpha.1`(semver 预发布语义下"通配"不成立) |
+| 会话内容体检(0.1.7) | `scripts/session-content-audit.ts`:v3/v4 双形态体检,`--fix` 自动备份+原地重写,`contentHasImage` 同构探针前后对照 |
 
 ### 🔜 设计中(见 v4.1 评审 O1–O7)
 
@@ -91,13 +94,17 @@ pnpm siainstall --profile web
 两个环境变量(`MEMOS_API_KEY` / `MEMOS_USER_ID`)。
 
 **在其他电脑安装(只需 3 步):**
-1. 把本项目源码目录(或打包好的 `dsh-reflection-memos-0.1.6.tgz`)拷贝到新电脑;
+1. 把本项目源码目录(或打包好的 `dsh-reflection-memos-0.1.7.tgz`)拷贝到新电脑;
 2. 新电脑确保已装 DSH 与 pnpm(插件零额外 npm 依赖,运行时依赖全部走宿主 DSH 的 peerDependencies);
 3. 在新电脑执行 `pnpm siainstall --profile web` → 配置环境变量 → 重启。
 
-> **兼容性**:同一份产物同时支持 DSH `0.1.x` 与 `0.2.x`(peerDependencies 为
-> `^0.1.1-rc.2 || ^0.2.0-rc.2`)。DSH ≥ 0.2.0 使用 v4 会话格式,注入消息必须带
-> **产出方自有 kind**(`plugin:dsh-reflection-memos`),0.1.5 起已适配。
+> **兼容性(0.1.7 起)**:peerDependencies **显式枚举**已适配的 DSH 预发布元组
+> `^0.1.1-rc.2 || ^0.1.5-rc.1 || ^0.2.0-rc.2 || ^0.2.1-alpha.1`(semver 语义下
+> `^0.1.1-rc.2` 这类范围**不接受**其他元组的预发布,故不能靠"通配"覆盖)。
+> **DSH 发布新的预发布元组时,需把该元组加进 `package.json` 的 peer 范围**,否则
+> profile 会跳过本插件(现象:插件"装了但没生效")。
+> DSH ≥ 0.2.0 使用 v4 会话格式,注入消息必须带**产出方自有 kind**
+> (`plugin:dsh-reflection-memos`),0.1.5 起已适配。
 
 > 需要打包产物给别的电脑时:`pnpm build && pnpm pack` → 得到 `.tgz`,在目标机器使用
 > [`scripts/install.mjs`](scripts/install.mjs)(见脚本 `--tgz` 用法)。
@@ -105,7 +112,7 @@ pnpm siainstall --profile web
 ### 手动安装
 
 ```bash
-dsh plugin --profile web add /path/to/dsh-reflection-memos-0.1.6.tgz
+dsh plugin --profile web add /path/to/dsh-reflection-memos-0.1.7.tgz
 # 插件自身 bundle.patch 会自动合并 insert,无需手动改 cordis.patch.yml
 # (DSH 0.1.2+ 支持插件 dsh.bundle.patch 自动注入;DSH 0.2.x 见上方兼容性说明)
 ```
@@ -258,11 +265,25 @@ src/
 2. **Reviewer 输出不稳**:opencode-go 结构性输出偶发空输出/非 JSON(已用 persona 强约束 + 重试兜底,后续 reflect-done 均成功)。
 3. **opencode-go/deepseek catalog 冲突**:`deepseek-v4-flash` 同时存在于两个 catalog,显式 agentOptions 会导致路由歧义,当前用 `agentOptions: {}` 继承 parent 回避。
 4. **`installSettingsSection` 已从 DSH 移除**(0.1.2-rc.1):配置注册必须用 `ctx.settings.register`(本插件已适配,见提交 `77527e6`)。
-5. **npx 发布版 vs checkout dev 版共用一个 `~/.dsh`**:dev(0.1.3-alpha.2)用 v2 会话格式、发布版(0.1.2-rc.1)读 v0 格式;启动哪一个,会话目录用哪个格式,混用需谨慎(见设计文档)。
+5. **会话格式随 DSH 升级而变(v0 → v2 → v4),且多个 DSH 版本共用一个 `~/.dsh`**:2026-09-30 起线上为 **v4**;不同 DSH 版本读写的格式可能不同,混用同一 `~/.dsh` 需谨慎(升级前建议备份 `~/.dsh/sessions`)。v4 的 `tool/result` 把内容块直接挂在 `data.message.content`(不再包 `tool-result` 包装块),且**拒绝退役的 `kind:'plugin'`**(见第 7 条)。排查/修复会话请用 `scripts/session-content-audit.ts`,不要沿用按 v0/v3 形状写的脚本。
+6. **`output.render` 必须返回 `ContentBlock[]`(2026-09-28 线上事故)**:返回裸字符串会被原样持久化为 tool-result 内容,下一轮请求组装时 `dsh-llm` 的 `contentHasImage()` 递归 `content.some(...)` 抛 `TypeError: content.some is not a function`;污染已落盘 → **该会话每轮必崩**。`memos_*` 三工具已于 `d1de009` 修复,并有 `scripts/repro-render-contract.ts` 回归;宿主侧不校验 render 返回类型,新增工具务必自查。
+7. **DSH 0.2.0-rc.2 的 v4 原生写路径拒绝 `kind:'plugin'`**:教训注入必须用产出方自有 kind `plugin:dsh-reflection-memos`(否则 `SessionFormatError`,线上实证 2026-09-30 02:47~02:51 UTC reflector dispose 失败),已由 0.1.5 修复。
+8. **opencode-go 订阅会失效**:2026-10-10 起该 provider 返回 `403 An active OpenCode Go subscription is required to use Go models`,导致依赖默认模型的 reviewer 子会话出现成串 `llm/retry`。当前默认模型已切到 `commandcode`(见 `~/.dsh/settings.yaml` 的 `agent-default-model`);排障时先确认 provider 额度,再怀疑插件。
+9. **peerDependencies 的预发布陷阱**:`^0.1.1-rc.2` 这类范围在 semver 语义下**不接受其他元组的预发布**(如 `0.1.5-rc.1`/`0.2.1-alpha.1`)→ profile 会跳过插件。0.1.7 起改为**显式枚举**已知预发布元组;DSH 每发布一个新的预发布元组(如 `0.3.0-beta.1`),需在 `package.json` 的 peer 范围里加白,否则重演"插件被跳过"。
 
 ---
 
 ## 开发日志
+
+### 2026-10-10(审计整改:peer 预发布陷阱 / 每日演化可观测 / 会话体检脚本;版本 0.1.7)
+
+- **peerDependencies 预发布陷阱(高)**:实测 `satisfies('0.2.1-alpha.1', '^0.1.1-rc.2 || ^0.2.0-rc.2') = false` —— 旧声明**连当前运行版本都不在范围内**(预发布只在同元组比较器下被接受),异地按 README 装机若跑 `0.1.5-rc.1`/`0.2.1-alpha.1` 会重演"profile 跳过插件"。改为**显式枚举**元组:`^0.1.1-rc.2 || ^0.1.5-rc.1 || ^0.2.0-rc.2 || ^0.2.1-alpha.1`(实测 0.1.1-rc.2/0.1.5-rc.1/0.1.6/0.2.0-rc.2/0.2.0/0.2.1-alpha.1/0.2.1 全 ✓,0.3.0 ✗)
+- **每日演化作业从"已接线"升级为"可观测"**:此前 `setInterval(24h)` 的 decay+autoAcknowledge 无任何落盘痕迹(审计里查不到,无法证明跑过)。现在每次运行写 `{kind:'evolution-daily',decayed,revived,archived,autoAcknowledged,errors,at}`,`/memos-stat` 增加一行**上次执行/下次计划**(未跑过时显示首次计划时间);该记录不带 `submitted`,不污染 `statsToday()`
+- **注册失败不再静默**:`tryRegister` 的失败此前只写 `audit.debug`(实测该日志未落盘)→ 升为宿主 `logger.warn`,让"工具没注册"在 hub.log/UI 可见
+- **会话内容体检脚本入库**:新增 `scripts/session-content-audit.ts`(v3/v4 双形态、`--fix` 自动备份 + zstd 原地重写、`contentHasImage` 同构探针给前后对照证据);真实全量 dry-run **481 文件 / 25,395 内容 / 0 违规**,合成污染样本可检出并修复(抛错 2 → 0)
+- **小修**:`limit` 的 1..5 边界进 wire schema(`minimum/maximum`);`repro-render-contract` 从只验 ack 扩到**三工具** schema/返回形状 + 成功路径 `ok=true`;smoke 去掉硬编码绝对路径(`scripts/smoke-entry.ts` 改用 cwd 相对解析,异地可跑)
+- **验证**:smoke **104 → 109 全绿**;render 回归全绿(3 工具);会话体检 dry-run 0 违规;v4 wire schema 3/3 object-rooted;`lib/` 重建与安装副本 md5 一致
+- **已知未做**(留在"已知问题"):`memos_lookup` 的 `current` 字段仍恒为空数组(需要 applier 暴露"当前已注入教训"才能填),`docs/plan-opencode-memos.md` 与本仓库演进已分叉
 
 ### 2026-09-30(适配 DSH 0.2.0-rc.2 / v4 会话产出方 kind;版本 0.1.5 → 0.1.6)
 
