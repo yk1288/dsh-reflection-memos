@@ -198,6 +198,11 @@ export function apply(ctx: Context, initialConfig: Config): void {
     }
   });
 
+  // 每日演化作业状态(2026-10-10:供 /memos-stat 观测"上次执行/下次计划")
+  const evolutionStartedAt = Date.now();
+  const EVOLUTION_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  let lastEvolutionDaily: { at: string; decayed: number; autoAcknowledged: number; errors: number } | null = null;
+
   // 注册命令
   registerCommands(ctx, {
     getReflector: () => reflector,
@@ -211,6 +216,7 @@ export function apply(ctx: Context, initialConfig: Config): void {
     getReporter: () => reporter,
     getCompliance: () => compliance,
     getMemoryTools: () => memoryTools,
+    getEvolutionStatus: () => ({ last: lastEvolutionDaily, intervalMs: EVOLUTION_INTERVAL_MS, startedAt: evolutionStartedAt }),
   });
 
   // 周期反思(默认关闭)
@@ -228,11 +234,32 @@ export function apply(ctx: Context, initialConfig: Config): void {
 
   // v5.0 #5:周期演化(默认每日,自动 decay + autoAcknowledge 治理 pending 积压)
   // 幂等且轻量:无用户交互,不阻塞主流程
+  // 2026-10-10 审计:此前"已接线"无任何运行期痕迹(无法证明真的跑过)。
+  //   现在每次运行落一条 {kind:'evolution-daily'} 审计,并把上次执行/下次计划
+  //   经 getEvolutionStatus 暴露给 /memos-stat。
   (ctx as any).setInterval(() => {
     evolver
       .run({ decay: true, autoAcknowledge: true })
+      .then((report) => {
+        const ranAt = new Date().toISOString();
+        lastEvolutionDaily = {
+          at: ranAt,
+          decayed: report.decayed,
+          autoAcknowledged: report.autoAcknowledged,
+          errors: report.errors.length,
+        };
+        audit.recordEvolutionDaily({
+          decayed: report.decayed,
+          revived: report.revived,
+          archived: report.archived,
+          autoAcknowledged: report.autoAcknowledged,
+          errors: report.errors,
+          at: ranAt,
+        });
+        ctx.logger.info(`dsh-reflection-memos: 每日演化完成 decayed=${report.decayed} autoAcknowledged=${report.autoAcknowledged} errors=${report.errors.length}`);
+      })
       .catch((error: unknown) => ctx.logger.warn(`周期演化失败: ${String(error)}`));
-  }, 24 * 60 * 60 * 1000);
+  }, EVOLUTION_INTERVAL_MS);
   ctx.logger.info('dsh-reflection-memos: 周期演化已启用(每日 decay+autoAcknowledge)');
 
   // v5.0 #7:memos_correct 闭环 —— correction-request 事件 → 账本 v+1 修正

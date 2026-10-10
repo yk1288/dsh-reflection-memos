@@ -52,6 +52,23 @@ export class AuditLogger {
     fs.appendFileSync(this.fileFor(), `${JSON.stringify({ kind: 'reflection', ...summary })}\n`, 'utf-8');
   }
 
+  /**
+   * 记录一次每日演化作业(2026-10-10 审计:让"已接线"可被运行期验证 ——
+   * 此前每日 decay+autoAcknowledge 没有任何落盘痕迹,无法证明真的跑过)。
+   * 该记录不带 submitted 字段,statsToday() 会跳过它,不影响统计口径。
+   */
+  recordEvolutionDaily(summary: {
+    decayed: number;
+    revived: number;
+    archived: number;
+    autoAcknowledged: number;
+    errors: string[];
+    at: string;
+  }): void {
+    this.ensureDir();
+    fs.appendFileSync(this.fileFor(), `${JSON.stringify({ kind: 'evolution-daily', ...summary })}\n`, 'utf-8');
+  }
+
   /** 从今日日志聚合统计 */
   statsToday(): ReflectionStats {
     const file = this.fileFor();

@@ -16,6 +16,16 @@ import type { ReporterModule } from '../loop/reporter';
 import type { ComplianceModule } from '../loop/compliance';
 import type { MemoryTools } from '../tools/memory-tools';
 
+/** 每日演化作业可观测状态(2026-10-10) */
+export interface EvolutionStatus {
+  /** 上次实际执行(未跑过为 null) */
+  last: { at: string; decayed: number; autoAcknowledged: number; errors: number } | null;
+  /** 作业间隔(ms) */
+  intervalMs: number;
+  /** 插件本次装配时间(epoch ms),用于推算首次计划时间 */
+  startedAt: number;
+}
+
 export interface ReflectionModules {
   getReflector: () => ReflectorModule;
   getRefiner: () => RefinerModule;
@@ -28,6 +38,7 @@ export interface ReflectionModules {
   getReporter?: () => ReporterModule;
   getCompliance?: () => ComplianceModule;
   getMemoryTools?: () => MemoryTools;
+  getEvolutionStatus?: () => EvolutionStatus;
 }
 
 /**
@@ -125,9 +136,19 @@ export function registerCommands(
   // /memos-stat:记忆统计
   commands.register({
     name: 'memos-stat',
-    description: '查看反思闭环的记忆统计',
+    description: '查看反思闭环的记忆统计(含每日演化作业上次执行/下次计划)',
     handler: async () => {
       const stats = modules.getRefiner().getStats();
+      // 2026-10-10:把"每日演化已接线"升级为可观测(上次执行/下次计划)
+      let evolveLine = '- 每日演化:状态不可用';
+      const status = modules.getEvolutionStatus?.();
+      if (status) {
+        const toLocal = (ms: number) => new Date(ms).toLocaleString('zh-CN');
+        const lastMs = status.last ? Date.parse(status.last.at) : status.startedAt;
+        evolveLine = status.last
+          ? `- 每日演化:上次 ${toLocal(lastMs)}(衰减 ${status.last.decayed} /自动确认 ${status.last.autoAcknowledged} /错误 ${status.last.errors}),下次约 ${toLocal(lastMs + status.intervalMs)}`
+          : `- 每日演化:本次装配后尚未执行,首次约 ${toLocal(status.startedAt + status.intervalMs)}`;
+      }
       return {
         kind: 'success' as const,
         text:
@@ -137,7 +158,8 @@ export function registerCommands(
           `- 入库失败:${stats.totalFailed}\n` +
           `- 今日写入:${stats.todayWritten}\n` +
           `- 事实记忆:${stats.factCount} 条\n` +
-          `- 教训记忆:${stats.lessonCount} 条`,
+          `- 教训记忆:${stats.lessonCount} 条\n` +
+          evolveLine,
       };
     },
   });
