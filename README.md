@@ -63,6 +63,8 @@ DSH Session ──▶ Observer ──▶ Reflector(三审) ──▶ refiner    
 | 写入→召回闭环 | 写入的记忆被 memos-cloud 自动召回引用(实测:用户问 DSH 部署经验,助手引用记忆回答) |
 | `/plan-and-execute` | Planner 子代理计划 + `runMaintenance` 子任务自动推进(已解决) |
 | `/memos-stat` | 审计日志聚合统计 |
+| DSH 0.2.x / v4 会话兼容 | 0.1.5 起:peerDeps 同时接受 `0.1.x`/`0.2.x`;教训注入使用产出方自有 kind `plugin:dsh-reflection-memos`(v4 拒绝退役的 `kind:'plugin'`);实测 v4 会话注入落盘无 `SessionFormatError` |
+| 一键安装 v5.1 | `scripts/install.mjs`:JSONC 容错、双条目形态识别、幂等注入、环境变量校验与提示(0.1.6 打包) |
 
 ### 🔜 设计中(见 v4.1 评审 O1–O7)
 
@@ -89,9 +91,13 @@ pnpm siainstall --profile web
 两个环境变量(`MEMOS_API_KEY` / `MEMOS_USER_ID`)。
 
 **在其他电脑安装(只需 3 步):**
-1. 把本项目源码目录(或打包好的 `dsh-reflection-memos-0.1.0.tgz`)拷贝到新电脑;
+1. 把本项目源码目录(或打包好的 `dsh-reflection-memos-0.1.6.tgz`)拷贝到新电脑;
 2. 新电脑确保已装 DSH 与 pnpm(插件零额外 npm 依赖,运行时依赖全部走宿主 DSH 的 peerDependencies);
 3. 在新电脑执行 `pnpm siainstall --profile web` → 配置环境变量 → 重启。
+
+> **兼容性**:同一份产物同时支持 DSH `0.1.x` 与 `0.2.x`(peerDependencies 为
+> `^0.1.1-rc.2 || ^0.2.0-rc.2`)。DSH ≥ 0.2.0 使用 v4 会话格式,注入消息必须带
+> **产出方自有 kind**(`plugin:dsh-reflection-memos`),0.1.5 起已适配。
 
 > 需要打包产物给别的电脑时:`pnpm build && pnpm pack` → 得到 `.tgz`,在目标机器使用
 > [`scripts/install.mjs`](scripts/install.mjs)(见脚本 `--tgz` 用法)。
@@ -99,9 +105,9 @@ pnpm siainstall --profile web
 ### 手动安装
 
 ```bash
-dsh plugin --profile web add /path/to/dsh-reflection-memos-0.1.0.tgz
+dsh plugin --profile web add /path/to/dsh-reflection-memos-0.1.6.tgz
 # 插件自身 bundle.patch 会自动合并 insert,无需手动改 cordis.patch.yml
-# (DSH 0.1.2+ 支持插件 dsh.bundle.patch 自动注入)
+# (DSH 0.1.2+ 支持插件 dsh.bundle.patch 自动注入;DSH 0.2.x 见上方兼容性说明)
 ```
 
 ### 配套插件
@@ -257,6 +263,17 @@ src/
 ---
 
 ## 开发日志
+
+### 2026-09-30(适配 DSH 0.2.0-rc.2 / v4 会话产出方 kind;版本 0.1.5 → 0.1.6)
+
+- **背景**:DSH 升级到 0.2.0-rc.2 后,profile 直接**跳过本插件**并报 peerDependencies 不兼容 —— 0.1.3 声明的 `^0.1.1-rc.2` 在 0.x 语义下排除 0.2.x
+- **兼容声明**:peerDependencies 改为 `^0.1.1-rc.2 || ^0.2.0-rc.2`,dev 依赖锁定 0.2.0-rc.2(同一份产物同时兼容 0.1.x / 0.2.x 运行时)
+- **第二个破坏性变更(v4 产出方 kind)**:解除门禁后暴露 —— DSH 0.2.0-rc.2 的 **v4 原生写路径拒绝退役的 v3 包装 `kind:'plugin'`**(`SessionFormatError: format v4 message requires a producer-owned source kind`;线上实证 2026-09-30 02:47~02:51 UTC reflector dispose 失败)
+  - 修复:`src/loop/applier.ts` 教训注入消息改用产出方自有 kind `plugin:dsh-reflection-memos`(即官方 `producerKind()` 对第三方插件的等价产出),不再带 `plugin` 字段
+  - 验证:smoke 新增 v4 合规断言(注入 `source.kind` 非 `'plugin'` 且无 `plugin` 字段),**103 → 104 全绿**;真实 v4 会话日志确认注入以 `{"kind":"plugin:dsh-reflection-memos","form":"lesson-injection"}` 落盘
+- **一键安装脚本 v5.1**(`scripts/install.mjs`):修四处可用性问题(JSONC 容错 / 双条目形态识别 / 幂等 / 环境变量校验与提示)
+- `pnpm-workspace.yaml` 追加 0.2.0-rc.2 系列到 `minimumReleaseAgeExclude`(pnpm 11 供应链时限白名单,异地复现安装需要)
+- **发布**:0.1.5 → 0.1.6(install.mjs 修复后重新打包);`lib/` 重建后与已装载产物 md5 一致(`4e0019de…`)
 
 ### 2026-09-28(opencode 移植计划对照审计 → DSH 同补两个真缺陷)
 
