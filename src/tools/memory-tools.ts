@@ -47,10 +47,22 @@ export class MemoryTools {
     this.tryRegister();
   }
 
+  /** 注册/降级失败的告警:审计 debug 之外同时进宿主日志(hub.log/UI 可见) */
+  private warnHost(message: string): void {
+    this.audit.debug('memory-tools', message);
+    try {
+      (this.ctx as { logger?: { warn?: (m: string) => void } }).logger?.warn?.(`dsh-reflection-memos: ${message}`);
+    } catch {
+      // 宿主日志不可用不影响主流程
+    }
+  }
+
   private tryRegister(): void {
     const tools: Registry | undefined = (this.ctx as any).tools;
     if (!tools?.register) {
-      this.audit.debug('memory-tools', 'ctx.tools 不可用,记忆工具未注册(不影响主插件)');
+      // 2026-10-10 审计:此前只写 audit.debug(实测该日志未落盘)→ 注册类事故静默;
+      // 升为宿主 warn,让"工具没注册"在实例日志/UI 里可见。
+      this.warnHost('ctx.tools 不可用,记忆工具未注册(不影响主插件)');
       return;
     }
     try {
@@ -59,7 +71,7 @@ export class MemoryTools {
       tools.register(this.correctTool());
       this.audit.debug('memory-tools', '已注册 memos_lookup / memos_lesson_ack / memos_correct');
     } catch (error) {
-      this.audit.debug('memory-tools', `工具注册失败: ${String(error)}`);
+      this.warnHost(`内存工具注册失败: ${String(error)}`);
     }
   }
 
@@ -99,8 +111,12 @@ export class MemoryTools {
    * raw register 的 parameters 必须是 object-rooted JSON Schema
    * (schemaOf 原样透传上游;缺顶层 type 会被 Console Go 等拒收为
    * "type: null")。从 per-property 定义编译出 { type:'object', properties, required }。
+   * 除 type/description/required 外,其余 JSON-Schema 关键字(minimum/maximum/items…)
+   * 原样透传(2026-10-10 审计:limit 的 1..5 边界此前只写在 execute 里,模型侧看不到)。
    */
-  private static parameterSchema(props: Record<string, { type: string; description: string; required?: boolean }>) {
+  private static parameterSchema(
+    props: Record<string, { type: string; description?: string; required?: boolean } & Record<string, unknown>>,
+  ) {
     const required: string[] = [];
     const properties: Record<string, unknown> = {};
     for (const [key, def] of Object.entries(props)) {
@@ -123,7 +139,7 @@ export class MemoryTools {
         '返回每条教训的 patternKey、失败次数、重要性与正文。不要在不知道经验时重复踩坑——先查。',
       parameters: MemoryTools.parameterSchema({
         query: { type: 'string', required: true, description: '任务意图或场景关键词' },
-        limit: { type: 'integer', description: '返回条数,默认 3' },
+        limit: { type: 'integer', minimum: 1, maximum: 5, description: '返回条数,默认 3(范围 1..5)' },
       }),
       output: MemoryTools.resultSchema({
         ok: { type: 'boolean' },

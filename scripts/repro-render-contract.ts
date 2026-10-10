@@ -13,7 +13,8 @@
  *     dsh-tools/lib/types/index.d.ts: `render(...): ContentBlock[]`);
  *  2. 模拟 dsh-tools createSuccessResult → tool-result 消息 → 共享
  *     contentHasImage 递归,断言不再抛 TypeError;
- *  3. 断言 ackTool 的 output.schema 与其 execute 返回值形状一致。
+ *  3. 断言**三个工具**的 output.schema 与其 execute 返回值形状一致(2026-10-10 扩围,
+ *     并断言成功路径 ok=true)。
  *
  * 运行:pnpm exec esbuild scripts/repro-render-contract.ts --bundle --format=esm --platform=node --outfile=/tmp/repro-render.mjs && node /tmp/repro-render.mjs
  * (退出码 0 = 合约通过;非 0 = 复现失败)
@@ -42,10 +43,12 @@ function contentHasImage(content: unknown): boolean {
 async function main(): Promise<void> {
   const audit = new AuditLogger('/tmp/repro-render-audit');
   const store = new MemoryStore({ writerProvider: null, audit, ledgerDir: `/tmp/repro-render-${Date.now()}` });
-  store.ledger.createEntry({
+  const seed = store.ledger.createEntry({
     content: '复现脚本种子教训', kind: 'lesson', patternKey: 'repro.render',
     failureCount: 1, triage: 'pending',
   });
+  // 2026-10-10:种子必须落账本,否则 ack/correct 走失败分支,形状断言会失真
+  store.ledger.upsert(seed);
   const tools = new MemoryTools({ emit: () => {} } as never, audit, store, () => ({ correctPerDayLimit: 2 }));
 
   const lookup = (tools as unknown as { lookupTool(): any }).lookupTool();
@@ -83,12 +86,22 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log('\n[3] output.schema 与 execute 返回形状一致');
-  const ackResult = await ack.execute({ patternKey: 'repro.render' });
-  const ackSchemaType = ack.output.schema?.type;
-  check(`memos_lesson_ack schema type 与返回值匹配`,
-    ackSchemaType === 'object' ? typeof ackResult === 'object' && ackResult !== null : typeof ackResult === ackSchemaType,
-    `schema.type=${ackSchemaType}, 返回=${typeof ackResult}: ${JSON.stringify(ackResult)}`);
+  console.log('\n[3] output.schema 与 execute 返回形状一致(三工具,2026-10-10 扩围)');
+  const probeCases: Array<[string, any, Record<string, unknown>]> = [
+    ['memos_lookup', lookup, { query: '契约回归' }],
+    ['memos_lesson_ack', ack, { patternKey: 'repro.render' }],
+    ['memos_correct', correct, { memoryKey: seed.memoryKey, reason: '这是一条用于 render 契约回归的更正理由' }],
+  ];
+  for (const [name, tool, args] of probeCases) {
+    const result: any = await tool.execute(args);
+    const schemaType = tool.output?.schema?.type;
+    const actual = Array.isArray(result) ? 'array' : typeof result;
+    const shapeOk = schemaType === 'object'
+      ? typeof result === 'object' && result !== null && !Array.isArray(result)
+      : actual === schemaType;
+    check(`${name} schema(${schemaType}) 与返回值(${actual}) 匹配`, shapeOk, JSON.stringify(result)?.slice(0, 160));
+    check(`${name} execute 成功路径 ok=true`, result?.ok === true, JSON.stringify(result)?.slice(0, 160));
+  }
 
   if (failed > 0) {
     console.error(`\n❌ 合约回归失败:${failed} 项`);

@@ -720,7 +720,13 @@ console.log('\n[11] #3-#7 优化项');
   assert('#3: 无成功信号仍判违规', store.ledger.get(lesson.memoryKey)?.violationCount === 1, JSON.stringify(store.ledger.get(lesson.memoryKey)?.violationCount));
 
   // #6:persona 强化标记(源码字符串断言;顶部已 import fs)
-  const src = fs.readFileSync('/data/home/huangwei/py/dsh-reflection-memos/src/modules/reflector.ts', 'utf-8');
+  // 2026-10-10 审计:原为硬编码绝对路径(/data/home/...),异地/改目录即失败 →
+  // 改为仓库根相对解析(以 cwd 为准;smoke 约定在仓库根执行)。
+  const reflectorSrcPath = path.resolve(process.cwd(), 'src/modules/reflector.ts');
+  if (!fs.existsSync(reflectorSrcPath)) {
+    throw new Error(`未找到 ${reflectorSrcPath} —— 请在仓库根目录运行 smoke(见文件头用法)`);
+  }
+  const src = fs.readFileSync(reflectorSrcPath, 'utf-8');
   assert('#6: Reviewer persona 含"仅一个 JSON 对象"强约束', src.includes('仅一个 JSON 对象') && src.includes('第一个字符必须是'));
 
   // #7:correct-request → 账本 v+1 修正(模拟 index 闭包逻辑)
@@ -795,6 +801,45 @@ console.log('\n[12] 缺陷审计同补(D1 fold 过滤 active / D-flag 命令解�
   d1bStore.ledger.upsert(d1bLive);
   const d1bHit = d1bStore.ledger.foldRecurrence('d1b.k', 'lesson');
   assert('#D1: 高版本 superseded 也跳过(status 过滤生效)', d1bHit?.memoryKey === d1bLive.memoryKey && d1bHit?.version === 1, JSON.stringify(d1bHit && { key: d1bHit.memoryKey.slice(0, 8), version: d1bHit.version, status: d1bHit.status }));
+}
+
+// ---------- 13. 2026-10-10 审计项:limit 边界 / 每日演化可观测 / 审计记录 ----------
+console.log('\n[13] 2026-10-10 审计项(边界/演化可观测/审计落盘)');
+{
+  // (1) limit 的 1..5 边界必须进 wire schema(此前只写在 execute 里)
+  const aud13 = new AuditLogger(`/tmp/sia-a13-${Date.now()}`);
+  const store13 = new MemoryStore({ writerProvider: null, audit: aud13, ledgerDir: `/tmp/sia-l13-${Date.now()}` });
+  const mt13 = new MemoryTools({ emit: () => {} } as never, aud13, store13, () => ({ correctPerDayLimit: 1 }));
+  const lim13 = (mt13 as any).lookupTool().parameters.properties.limit;
+  assert('审计项: limit 声明 minimum/maximum', lim13.minimum === 1 && lim13.maximum === 5, JSON.stringify(lim13));
+
+  // (2) 每日演化审计记录落盘,且不污染 statsToday(无 submitted 字段)
+  const evoDir = `/tmp/sia-evo-${Date.now()}`;
+  const audEvo = new AuditLogger(evoDir);
+  audEvo.recordEvolutionDaily({ decayed: 2, revived: 1, archived: 0, autoAcknowledged: 3, errors: [], at: new Date().toISOString() });
+  const evoFile = fs.readdirSync(evoDir).find((f) => f.startsWith('audit-'));
+  const evoBody = evoFile ? fs.readFileSync(`${evoDir}/${evoFile}`, 'utf-8') : '';
+  assert('审计项: 每日演化写 {kind:evolution-daily}', evoBody.includes('"kind":"evolution-daily"') && evoBody.includes('"autoAcknowledged":3'), evoBody.slice(0, 140));
+  const st13 = audEvo.statsToday();
+  assert('审计项: 演化记录不污染 statsToday', st13.totalSubmitted === 0 && st13.todayWritten === 0, JSON.stringify(st13));
+
+  // (3) /memos-stat 必须显示"上次执行/下次计划"(把已接线升级为可观测)
+  const statsStub = { totalSubmitted: 1, totalIngested: 1, totalFailed: 0, todayWritten: 1, factCount: 0, lessonCount: 1 };
+  const baseModules = {
+    getReflector: () => ({}) as never, getRefiner: () => ({ getStats: () => statsStub }) as never,
+    getObserver: () => ({}) as never, getExecutor: () => ({}) as never, getPlanner: () => ({}) as never, getStore: () => ({}) as never,
+  };
+  const capture = (mods: unknown) => {
+    const reg: any[] = [];
+    registerCommands({ commands: { register: (c: any) => reg.push(c) }, logger: { warn: () => {}, info: () => {} } } as never, mods as never);
+    return reg.find((c) => c.name === 'memos-stat');
+  };
+  const notRun = capture({ ...baseModules, getEvolutionStatus: () => ({ last: null, intervalMs: 86400000, startedAt: Date.now() }) });
+  const outNotRun = await notRun.handler({});
+  assert('审计项: /memos-stat 未执行时显示首次计划', outNotRun.text.includes('每日演化') && outNotRun.text.includes('尚未执行'), outNotRun.text.slice(-120));
+  const ran = capture({ ...baseModules, getEvolutionStatus: () => ({ last: { at: new Date().toISOString(), decayed: 2, autoAcknowledged: 3, errors: 0 }, intervalMs: 86400000, startedAt: Date.now() }) });
+  const outRan = await ran.handler({});
+  assert('审计项: /memos-stat 显示上次执行+下次计划', outRan.text.includes('上次') && outRan.text.includes('下次'), outRan.text.slice(-140));
 }
 
 // ---------- 辅助 ----------
